@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "322229820964",
+    "project_id": "jobbot-f483e",
+    "storage_bucket": "jobbot-f483e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:322229820964:android:aa185da343b08a7c2042b1",
+        "android_client_info": {
+          "package_name": "com.example.prototype_1"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCQc1aAveY6fZE2D9avhV-_l5i31duWBRM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:322229820964:android:435411372aa3ab922042b1",
+        "android_client_info": {
+          "package_name": "com.example.prototype_2"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCQc1aAveY6fZE2D9avhV-_l5i31duWBRM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
