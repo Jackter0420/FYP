@@ -1,6 +1,6 @@
 // lib/screens/jobseeker_register.dart
 import 'package:flutter/material.dart';
-import 'package:prototype_2/services/standalone_auth.dart'; // Import standalone auth
+import 'package:prototype_2/services/firebase_service.dart';
 import 'login.dart';
 
 class JobSeekerRegisterPage extends StatefulWidget {
@@ -16,7 +16,7 @@ class _JobSeekerRegisterPageState extends State<JobSeekerRegisterPage> {
   final _jobTitleController = TextEditingController();
   final _skillsController = TextEditingController();
   final _experienceController = TextEditingController();
-  final _headphoneController = TextEditingController();
+  final _handphoneController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
@@ -29,7 +29,7 @@ class _JobSeekerRegisterPageState extends State<JobSeekerRegisterPage> {
     _jobTitleController.dispose();
     _skillsController.dispose();
     _experienceController.dispose();
-    _headphoneController.dispose();
+    _handphoneController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
@@ -38,69 +38,69 @@ class _JobSeekerRegisterPageState extends State<JobSeekerRegisterPage> {
 
   // Register using improved standalone auth service
   Future<void> _registerJobSeeker() async {
-    if (!_formKey.currentState!.validate()) return;
-    
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
+  if (!_formKey.currentState!.validate()) return;
+  
+  setState(() {
+    _isLoading = true;
+    _errorMessage = null;
+  });
 
-    try {
-      print("Starting job seeker registration with improved standalone auth");
-      
-      // Get form data
-      final email = _emailController.text.trim();
-      final password = _passwordController.text.trim();
-      
-      // Convert comma-separated skills to a list
-      final skills = _skillsController.text.split(',').map((e) => e.trim()).toList();
-      
-      // Create user data map
-      final userData = {
-        'personalName': _nameController.text.trim(),
-        'preferredJobTitle': _jobTitleController.text.trim(),
-        'skills': skills,
-        'workingExperience': _experienceController.text.trim(),
-        'headphone': _headphoneController.text.trim(),
-      };
-      
-      // Register with user data
-      final result = await StandaloneAuth.registerUser(
-        email,
-        password,
-        userData,
-        'jobSeeker' // User type
-      );
-      
-      if (!result['success']) {
-        throw Exception(result['message']);
-      }
-      
-      if (!mounted) return;
-      
-      // Show success message
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Registration successful! Please log in with your new account.'),
-          backgroundColor: Colors.green,
-          duration: Duration(seconds: 2),
-        ),
-      );
-      
-      // Navigate back to login page
-      Navigator.pushAndRemoveUntil(
-        context,
-        MaterialPageRoute(builder: (context) => const LoginPage()),
-        (route) => false,
-      );
-    } catch (e) {
-      print("Registration error: $e");
-      setState(() {
-        _errorMessage = e.toString();
-        _isLoading = false;
-      });
+  try {
+    print("Starting job seeker registration with FirebaseService");
+    
+    // Get form data
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
+    
+    // Convert comma-separated skills to a list
+    final skills = _skillsController.text.split(',').map((e) => e.trim()).toList();
+    
+    // Create user data map
+    final userData = {
+      'personalName': _nameController.text.trim(),
+      'preferredJobTitle': _jobTitleController.text.trim(),
+      'skills': skills,
+      'workingExperience': _experienceController.text.trim(),
+      'phoneNumber': _handphoneController.text.trim(), // Using headphone field for phone number
+    };
+    
+    // Use FirebaseService instead of StandaloneAuth
+    final result = await FirebaseService.registerUser(
+      email,
+      password,
+      userData,
+      'jobSeeker' // User type
+    );
+    
+    if (!result['success']) {
+      throw Exception(result['message']);
     }
+    
+    if (!mounted) return;
+    
+    // Show success message
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Registration successful! Please log in with your new account.'),
+        backgroundColor: Colors.green,
+        duration: Duration(seconds: 2),
+      ),
+    );
+    
+    // Navigate back to login page
+    Navigator.pushAndRemoveUntil(
+      context,
+      MaterialPageRoute(builder: (context) => const LoginPage()),
+      (route) => false,
+    );
+  } catch (e) {
+    print("Registration error: $e");
+    setState(() {
+      _errorMessage = e.toString();
+      _isLoading = false;
+    });
   }
+}
 
   @override
   Widget build(BuildContext context) {
@@ -218,9 +218,9 @@ class _JobSeekerRegisterPageState extends State<JobSeekerRegisterPage> {
                 ),
                 const SizedBox(height: 20),
                 TextFormField(
-                  controller: _headphoneController,
+                  controller: _handphoneController,
                   decoration: const InputDecoration(
-                    labelText: 'Headphone',
+                    labelText: 'Handphone',
                     filled: true,
                     fillColor: Colors.white,
                     border: OutlineInputBorder(),

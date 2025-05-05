@@ -1,10 +1,12 @@
 // lib/screens/employer_chat_page.dart
 import 'package:flutter/material.dart';
+import 'package:prototype_2/screens/candidate_search_page.dart';
 import 'package:prototype_2/screens/manage_jobs_page.dart';
 import 'package:prototype_2/screens/update_status_page.dart';
 import 'package:prototype_2/screens/profile_edit_page.dart';
 import 'package:prototype_2/screens/debug_login.dart'; // Import the debug page
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:prototype_2/widgets/employer_app_bar.dart';
 import 'package:provider/provider.dart';
 import 'package:prototype_2/providers/user_provider.dart';
 import 'login.dart';
@@ -530,55 +532,39 @@ Future<void> _sendMessageToRasa(String messageText) async {
     print("Building EmployerChatPage with company name: $companyName");
     
     try {
-      return Scaffold(
-        backgroundColor: const Color(0xFFE7E7E7),
-        appBar: AppBar(
-          automaticallyImplyLeading: false,
-          title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('Employer Chat'),
-              Text(
-                companyName,
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.normal,
-                ),
+          return Scaffold(
+            backgroundColor: const Color(0xFFE7E7E7),
+            appBar: EmployerAppBar(
+              title: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Employer Chat'),
+                  Text(
+                    companyName,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.normal,
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
-          backgroundColor: Theme.of(context).primaryColor,
-          actions: [
-            // Debug button
-            IconButton(
-              icon: const Icon(Icons.bug_report),
-              tooltip: 'Debug',
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const DebugLoginPage()),
-                ).then((_) {
-                  // Refresh data when returning from debug page
-                  _fetchUserData();
-                });
-              },
+              additionalActions: [
+                // Debug button
+                IconButton(
+                  icon: const Icon(Icons.bug_report),
+                  tooltip: 'Debug',
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => const DebugLoginPage()),
+                    ).then((_) {
+                      // Refresh data when returning from debug page
+                      _fetchUserData();
+                    });
+                  },
+                ),
+              ],
             ),
-            // Profile Button
-            IconButton(
-              icon: const Icon(Icons.account_circle),
-              tooltip: 'Profile',
-              onPressed: () {
-                _showProfileOptions(context, userData);
-              },
-            ),
-            // Logout Button
-            IconButton(
-              icon: const Icon(Icons.logout),
-              tooltip: 'Logout',
-              onPressed: () => _logout(context),
-            ),
-          ],
-        ),
         body: SafeArea(
           child: Column(
             children: [
@@ -686,53 +672,71 @@ Future<void> _sendMessageToRasa(String messageText) async {
                   ],
                 ),
               ),
-              
-              // Bottom Navigation Bar
-              BottomNavigationBar(
-                backgroundColor: Theme.of(context).primaryColor,
-                items: const [
-                  BottomNavigationBarItem(
-                    icon: Icon(Icons.work),
-                    label: 'Manage Jobs',
-                  ),
-                  BottomNavigationBarItem(
-                    icon: Icon(Icons.chat),
-                    label: 'Chatbot',
-                  ),
-                  BottomNavigationBarItem(
-                    icon: Icon(Icons.update),
-                    label: 'Update Application',
-                  ),
-                ],
-                currentIndex: _currentIndex,
-                onTap: (index) {
-                  setState(() {
-                    _currentIndex = index;
-                  });
-                  
-                  switch (index) {
-                    case 0:
-                      Navigator.pushAndRemoveUntil(
-                        context,
-                        MaterialPageRoute(builder: (context) => ManageJobsPage()),
-                        (route) => false,
-                      );
-                      break;
-                    case 1:
-                      // Already on EmployerChatPage
-                      break;
-                    case 2:
-                      Navigator.pushAndRemoveUntil(
-                        context,
-                        MaterialPageRoute(builder: (context) => UpdateStatusPage()),
-                        (route) => false,
-                      );
-                      break;
-                  }
-                },
-              ),
             ],
           ),
+        ),
+        bottomNavigationBar: BottomNavigationBar(
+          backgroundColor: Theme.of(context).primaryColor,
+          // Make sure items are visible
+          selectedItemColor: Colors.black,
+          unselectedItemColor: Colors.black54,
+          // Ensure labels are shown
+          showSelectedLabels: true,
+          showUnselectedLabels: true,
+          // Increase the visibility
+          elevation: 8,
+          type: BottomNavigationBarType.fixed,
+          items: const [
+            BottomNavigationBarItem(
+              icon: Icon(Icons.work),
+              label: 'Manage Jobs',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.chat),
+              label: 'Chatbot',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.update),
+              label: 'Update Application',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.people),
+              label: 'Candidates',
+            ),
+          ],
+          currentIndex: _currentIndex,
+          onTap: (index) {
+            setState(() {
+              _currentIndex = index;
+            });
+            
+            switch (index) {
+              case 0:
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(builder: (context) => ManageJobsPage()),
+                  (route) => false,
+                );
+                break;
+              case 1:
+                // Already on EmployerChatPage
+                break;
+              case 2:
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(builder: (context) => UpdateStatusPage()),
+                  (route) => false,
+                );
+                break;
+              case 3:
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(builder: (context) => const CandidateSearchPage()),
+                  (route) => false,
+                );
+                break;
+            }
+          },
         ),
       );
     } catch (e, stackTrace) {

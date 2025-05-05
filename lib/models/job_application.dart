@@ -6,10 +6,12 @@ class JobApplication {
   final String companyName;
   final String jobSeekerId;
   final String jobSeekerName;
+  final String? jobSeekerPhone;
   final String status;
   final DateTime appliedDate;
   final DateTime? lastUpdateDate;
   final String? coverLetter;
+  final String? resumeUrl;
 
   JobApplication({
     required this.id,
@@ -18,10 +20,12 @@ class JobApplication {
     required this.companyName,
     required this.jobSeekerId,
     required this.jobSeekerName,
+    this.jobSeekerPhone,
     required this.status,
     required this.appliedDate,
     this.lastUpdateDate,
     this.coverLetter,
+    this.resumeUrl,
   });
 
   // Create from Firestore data
@@ -33,6 +37,7 @@ class JobApplication {
       companyName: data['company_name'] ?? 'Unknown Company',
       jobSeekerId: data['job_seeker_id'] ?? '',
       jobSeekerName: data['job_seeker_name'] ?? 'Anonymous',
+      jobSeekerPhone: data['job_seeker_phone'],
       status: data['status'] ?? 'pending',
       appliedDate: data['applied_date'] != null 
           ? (data['applied_date'] is DateTime 
@@ -45,6 +50,7 @@ class JobApplication {
               : DateTime.parse(data['last_update_date']))
           : null,
       coverLetter: data['cover_letter'],
+      resumeUrl: data['resume_url'],
     );
   }
 
@@ -56,10 +62,12 @@ class JobApplication {
       'company_name': companyName,
       'job_seeker_id': jobSeekerId,
       'job_seeker_name': jobSeekerName,
+      'job_seeker_phone': jobSeekerPhone,
       'status': status,
       'applied_date': appliedDate.toIso8601String(),
       'last_update_date': lastUpdateDate?.toIso8601String(),
       'cover_letter': coverLetter,
+      'resume_url': resumeUrl,
     };
   }
 }

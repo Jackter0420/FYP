@@ -4,9 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
 import 'package:prototype_2/providers/user_provider.dart';
 import 'package:prototype_2/services/rasa_chatbot_service.dart';
-import 'package:prototype_2/services/standalone_auth.dart';
 import 'screens/login.dart';
-
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
@@ -18,7 +16,7 @@ void main() async {
       appId: "1:322229820964:android:435411372aa3ab922042b1",
       messagingSenderId: "322229820964",
       projectId: "jobbot-f483e",
-      storageBucket: "jobbot-f483e.appspot.com",
+      storageBucket: "jobbot-f483e.firebasestorage.app",
     );
     
     print("[MAIN] Calling Firebase.initializeApp()");
@@ -30,10 +28,6 @@ void main() async {
     User? currentUser = FirebaseAuth.instance.currentUser;
     print("[MAIN] Current user: ${currentUser?.uid ?? 'No user logged in'}");
     
-    // Check if Firestore is accessible
-    print("[MAIN] Checking if there is a user in SharedPreferences");
-    final authInfo = await StandaloneAuth.getCurrentUserInfo();
-    print("[MAIN] User auth info: $authInfo");
     
   } catch (e) {
     print("[MAIN] Error initializing Firebase: $e");
@@ -83,27 +77,16 @@ class _AuthWrapperState extends State<AuthWrapper> {
   }
 
   Future<void> _checkCurrentUser() async {
-    // Check for any existing auth sessions and sign out
-    // This prevents auto-login issues
     try {
-      // Check if user is logged in using StandaloneAuth
-      bool isLoggedIn = await StandaloneAuth.isLoggedIn();
-      print("[AUTH] User logged in check: $isLoggedIn");
-      
-      if (isLoggedIn) {
-        print("[AUTH] User is logged in, retrieving user data");
-        final userData = await StandaloneAuth.getCurrentUserInfo();
-        print("[AUTH] User data: $userData");
-      } else {
-        print("[AUTH] No user is logged in");
-      }
-      
-      // We're still going to sign out the user for testing purposes
+      // You can directly check Firebase Auth instead of StandaloneAuth
       final currentUser = FirebaseAuth.instance.currentUser;
       if (currentUser != null) {
+        print("[AUTH] User is logged in: ${currentUser.uid}");
+        // Optionally sign out for testing purposes
         await FirebaseAuth.instance.signOut();
-        await StandaloneAuth.signOut();
         print("[AUTH] Signed out existing user to prevent auto-login issues");
+      } else {
+        print("[AUTH] No user is logged in");
       }
     } catch (e) {
       print("[AUTH] Error checking/handling current user: $e");
@@ -116,6 +99,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
       _isLoading = false;
     });
   }
+
 
   @override
   Widget build(BuildContext context) {
