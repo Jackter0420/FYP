@@ -15,6 +15,7 @@ class JobApplicationService {
     required String jobId,
     required String coverLetter,
     String? resumeUrl,
+    String? selectedSlotId,
   }) async {
     try {
       print("JobApplicationService: Submitting application for job ID: $jobId");
@@ -139,6 +140,296 @@ class JobApplicationService {
       };
     }
   }
+
+// NEW METHOD: Submit application with interview slot selection
+  static Future<Map<String, dynamic>> submitApplicationWithInterview({
+    required String jobId,
+    required String coverLetter,
+    String? resumeUrl,
+    String? selectedSlotId,
+  }) async {
+    try {
+      print("JobApplicationService: Submitting application with interview slot for job ID: $jobId");
+      
+      // First submit the regular application
+      final result = await submitApplication(
+        jobId: jobId,
+        coverLetter: coverLetter,
+        resumeUrl: resumeUrl,
+      );
+      
+      if (!result['success']) {
+        return result;
+      }
+      
+      final applicationId = result['applicationId'];
+      
+      // If interview slot is selected, book it
+      if (selectedSlotId != null && selectedSlotId.isNotEmpty) {
+        print("JobApplicationService: Booking interview slot: $selectedSlotId");
+        
+        final slotBooked = await bookInterviewSlot(
+          jobId: jobId,
+          applicationId: applicationId,
+          slotId: selectedSlotId,
+        );
+        
+        if (!slotBooked) {
+          // Application was submitted but slot booking failed
+          return {
+            'success': true,
+            'applicationId': applicationId,
+            'message': 'Application submitted successfully, but interview slot booking failed.',
+          };
+        }
+      }
+      
+      return {
+        'success': true,
+        'applicationId': applicationId,
+        'message': selectedSlotId != null ? 
+          'Application submitted with interview slot booked!' : 
+          'Application submitted successfully',
+      };
+    } catch (e) {
+      print("JobApplicationService: Error in submitApplicationWithInterview: $e");
+      return {
+        'success': false,
+        'message': 'Error submitting application: ${e.toString()}',
+      };
+    }
+  }
+
+  // NEW METHOD: Book an interview slot
+ static Future<bool> bookInterviewSlot({
+  required String jobId,
+  required String applicationId,
+  required String slotId,
+}) async {
+  try {
+    final currentUser = _auth.currentUser;
+    if (currentUser == null) {
+      print("JobApplicationService: Error - No user logged in");
+      return false;
+    }
+    
+    // Get job data
+    final jobDoc = await _firestore.collection('jobs').doc(jobId).get();
+    if (!jobDoc.exists) {
+      print("JobApplicationService: Error - Job not found");
+      return false;
+    }
+    
+    final jobData = jobDoc.data()!;
+    final employerId = jobData['employer_id'] as String?;
+    
+    if (employerId == null) {
+      print("JobApplicationService: Error - Employer ID not found");
+      return false;
+    }
+    
+    // Check if job is still active
+    final deadline = jobData['deadline'] as String?;
+    if (deadline != null && deadline.isNotEmpty) {
+      try {
+        final deadlineDate = DateTime.parse(deadline);
+        final now = DateTime.now();
+        
+        if (now.isAfter(deadlineDate)) {
+          print("JobApplicationService: Error - Job deadline has passed");
+          return false;
+        }
+      } catch (e) {
+        print("JobApplicationService: Error parsing deadline: $e");
+      }
+    }
+    
+    // Get interview slots
+    final slots = jobData['interview_slots'] as List?;
+    if (slots == null) {
+      print("JobApplicationService: Error - No interview slots found");
+      return false;
+    }
+    
+    // Find and update the selected slot
+    List<Map<String, dynamic>> updatedSlots = [];
+    bool slotFound = false;
+    
+    for (var slotData in slots) {
+      Map<String, dynamic> slotMap = Map<String, dynamic>.from(slotData);
+      
+      if (slotMap['id'] == slotId) {
+        // Check if slot is already booked
+        if (slotMap['is_booked'] == true) {
+          print("JobApplicationService: Error - Selected slot is already booked");
+          return false;
+        }
+        
+        // Check if interview slot is before deadline
+        final slotStartTime = slotMap['start_time'];
+        if (deadline != null && deadline.isNotEmpty) {
+          try {
+            final slotDate = DateTime.parse(slotStartTime);
+            final deadlineDate = DateTime.parse(deadline);
+            
+            if (slotDate.isAfter(deadlineDate)) {
+              print("JobApplicationService: Error - Interview slot is after job deadline");
+              return false;
+            }
+          } catch (e) {
+            print("JobApplicationService: Error checking slot date: $e");
+          }
+        }
+        
+        // Mark this slot as booked
+        slotMap['is_booked'] = true;
+        slotMap['booked_by_job_seeker_id'] = currentUser.uid;
+        slotMap['booked_by_job_seeker_name'] = currentUser.displayName ?? 'Job Seeker';
+        
+        slotFound = true;
+        print("JobApplicationService: Slot $slotId marked as booked");
+      }
+      
+      updatedSlots.add(slotMap);
+    }
+    
+    if (!slotFound) {
+      print("JobApplicationService: Error - Slot $slotId not found");
+      return false;
+    }
+    
+    // Update job with new slot status
+    await _updateJobInterviewSlots(jobId, employerId, updatedSlots);
+    
+    // Update application with booked slot information
+    await _updateApplicationWithSlot(applicationId, slotId, currentUser.uid, employerId);
+    
+    print("JobApplicationService: Interview slot booked successfully");
+    return true;
+  } catch (e) {
+    print("JobApplicationService: Error booking interview slot: $e");
+    return false;
+  }
+}
+
+// Helper method to update job with interview slots
+static Future<void> _updateJobInterviewSlots(
+  String jobId, 
+  String employerId, 
+  List<Map<String, dynamic>> updatedSlots
+) async {
+  // Update in main jobs collection
+  await _firestore.collection('jobs').doc(jobId).update({
+    'interview_slots': updatedSlots,
+  });
+  
+  // Update in employer's subcollection
+  await _firestore
+      .collection('users')
+      .doc(employerId)
+      .collection('jobs')
+      .doc(jobId)
+      .update({
+    'interview_slots': updatedSlots,
+  });
+}
+
+// Helper method to update application with booked slot
+static Future<void> _updateApplicationWithSlot(
+  String applicationId, 
+  String slotId, 
+  String jobSeekerId, 
+  String employerId
+) async {
+  final updateData = {
+    'booked_interview_id': slotId,
+    'interview_status': 'scheduled',
+    'last_update_date': DateTime.now().toIso8601String(),
+  };
+  
+  // Update application in main collection
+  await _firestore.collection('applications').doc(applicationId).update(updateData);
+  
+  // Update application in job seeker's subcollection
+  await _firestore
+      .collection('users')
+      .doc(jobSeekerId)
+      .collection('applications')
+      .doc(applicationId)
+      .update(updateData);
+  
+  // Update application in employer's subcollection
+  await _firestore
+      .collection('users')
+      .doc(employerId)
+      .collection('applications')
+      .doc(applicationId)
+      .update(updateData);
+}
+
+// Add a method to check and remove expired interview slots
+static Future<void> checkAndRemoveExpiredInterviewSlots() async {
+  try {
+    final now = DateTime.now();
+    
+    // Get all jobs with interview slots
+    final jobsSnapshot = await _firestore
+        .collection('jobs')
+        .where('has_interview_slots', isEqualTo: true)
+        .get();
+    
+    for (var jobDoc in jobsSnapshot.docs) {
+      final jobData = jobDoc.data();
+      final deadline = jobData['deadline'] as String?;
+      
+      if (deadline != null && deadline.isNotEmpty) {
+        try {
+          final deadlineDate = DateTime.parse(deadline);
+          
+          // If deadline has passed, disable interview slots
+          if (now.isAfter(deadlineDate)) {
+            await _disableJobInterviewSlots(jobDoc.id, jobData['employer_id']);
+          }
+        } catch (e) {
+          print("Error checking job deadline: $e");
+        }
+      }
+    }
+  } catch (e) {
+    print("Error checking expired interview slots: $e");
+  }
+}
+
+// Helper method to disable interview slots for expired jobs
+static Future<void> _disableJobInterviewSlots(String jobId, String employerId) async {
+  try {
+    final updateData = {
+      'interview_slots': [],
+      'has_interview_slots': false,
+      'interview_slots_disabled': true,
+      'interview_slots_disabled_date': DateTime.now().toIso8601String(),
+      'last_updated': DateTime.now().toIso8601String(),
+    };
+    
+    // Update in main jobs collection
+    await _firestore.collection('jobs').doc(jobId).update(updateData);
+    
+    // Update in employer's subcollection
+    if (employerId != null) {
+      await _firestore
+          .collection('users')
+          .doc(employerId)
+          .collection('jobs')
+          .doc(jobId)
+          .update(updateData);
+    }
+    
+    print("Disabled interview slots for expired job: $jobId");
+  } catch (e) {
+    print("Error disabling interview slots: $e");
+  }
+}
+
 
   // Get all applications for the current job seeker
   static Future<List<JobApplication>> getMyApplications() async {

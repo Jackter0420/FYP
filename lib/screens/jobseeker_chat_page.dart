@@ -1,7 +1,9 @@
 // lib/screens/jobseeker_chat_page.dart - PART 1
 import 'dart:async';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:prototype_2/models/job_application.dart';
 import 'package:prototype_2/screens/job_recommendations_page.dart';
 import 'package:prototype_2/widgets/jobseeker_app_bar.dart';
 import 'package:provider/provider.dart';
@@ -12,6 +14,7 @@ import 'dart:io';
 import 'package:prototype_2/screens/jobseeker_profile_edit_page.dart';
 import 'package:prototype_2/services/rasa_chatbot_service.dart';
 import 'package:prototype_2/services/job_application_service.dart';
+import 'package:prototype_2/models/interview_slot.dart';
 import 'package:prototype_2/screens/Track_application_page.dart';
 import 'package:prototype_2/providers/user_provider.dart';
 import 'package:intl/intl.dart';
@@ -582,145 +585,295 @@ Future<void> _loadAppliedJobs() async {
   }
   
   // Show apply dialog with cover letter input and resume upload
-  void _showApplyDialog(String jobId, String jobTitle, String companyName) {
-    final coverLetterController = TextEditingController();
-    File? selectedResume;
-    String? resumeFileName;
-    
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          builder: (context, setState) {
-            return AlertDialog(
-              title: Text('Apply for $jobTitle'),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Company: $companyName'),
-                    const SizedBox(height: 16),
-                    
-                    // Cover Letter Input
-                    TextField(
-                      controller: coverLetterController,
-                      maxLines: 5,
-                      decoration: const InputDecoration(
-                        labelText: 'Cover Letter',
-                        hintText: 'Write a brief cover letter...',
-                        border: OutlineInputBorder(),
-                      ),
+void _showApplyDialog(String jobId, String jobTitle, String companyName) {
+  final coverLetterController = TextEditingController();
+  File? selectedResume;
+  String? resumeFileName;
+  String? selectedSlotId;
+  
+  showDialog(
+    context: context,
+    builder: (BuildContext context) {
+      return StatefulBuilder(
+        builder: (context, setState) {
+          return AlertDialog(
+            title: Text('Apply for $jobTitle'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Company: $companyName'),
+                  const SizedBox(height: 16),
+                  
+                  // Cover Letter Input
+                  TextField(
+                    controller: coverLetterController,
+                    maxLines: 5,
+                    decoration: const InputDecoration(
+                      labelText: 'Cover Letter',
+                      hintText: 'Write a brief cover letter...',
+                      border: OutlineInputBorder(),
                     ),
-                    
-                    const SizedBox(height: 16),
-                    
-                    // Resume Upload Section
-                    const Text(
-                      'Resume (Optional)',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    
-                    // Show selected file or upload button
-                    if (selectedResume != null)
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Row(
+                  ),
+                  
+                  const SizedBox(height: 16),
+                  
+                  // Interview Slots Section
+                  FutureBuilder<DocumentSnapshot>(
+                    future: FirebaseFirestore.instance
+                        .collection('jobs')
+                        .doc(jobId)
+                        .get(),
+                    builder: (context, snapshot) {
+                      if (!snapshot.hasData) return const SizedBox.shrink();
+                      
+                      final jobData = snapshot.data!.data() as Map<String, dynamic>?;
+                      
+                      if (jobData == null) return const SizedBox.shrink();
+                      
+                      // Check if job has deadline and if it's passed
+                      final deadline = jobData['deadline'] as String?;
+                      bool isExpired = false;
+                      DateTime? deadlineDate;
+                      
+                      if (deadline != null && deadline.isNotEmpty) {
+                        try {
+                          deadlineDate = DateTime.parse(deadline);
+                          isExpired = DateTime.now().isAfter(deadlineDate);
+                        } catch (e) {
+                          print("Error parsing deadline: $e");
+                        }
+                      }
+                      
+                      // Check if job has interview slots and is not expired
+                      if (jobData['has_interview_slots'] == true && 
+                          jobData['interview_slots'] != null && 
+                          !isExpired) {
+                        
+                        final slots = jobData['interview_slots'] as List;
+                        final availableSlots = slots.where((slotData) {
+                          final slot = InterviewSlot.fromMap(slotData);
+                          // Filter out booked slots and slots beyond deadline
+                          if (slot.isBooked) return false;
+                          
+                          if (deadlineDate != null) {
+                            return slot.startTime.isBefore(deadlineDate);
+                          }
+                          return true;
+                        }).toList();
+                        
+                        if (availableSlots.isEmpty) {
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8.0),
+                            child: Text(
+                              'No interview slots available',
+                              style: TextStyle(color: Colors.red),
+                            ),
+                          );
+                        }
+                        
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Icon(Icons.insert_drive_file, color: Colors.blue),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                resumeFileName ?? 'resume.pdf',
-                                overflow: TextOverflow.ellipsis,
+                            Text(
+                              'Select Interview Time:',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 16,
                               ),
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.close, color: Colors.red),
-                              onPressed: () {
-                                setState(() {
-                                  selectedResume = null;
-                                  resumeFileName = null;
-                                });
-                              },
+                            const SizedBox(height: 8),
+                            Container(
+                              height: 150,
+                              decoration: BoxDecoration(
+                                border: Border.all(color: Colors.grey.shade300),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: ListView.builder(
+                                padding: const EdgeInsets.all(8),
+                                itemCount: availableSlots.length,
+                                itemBuilder: (context, index) {
+                                  final slotData = availableSlots[index];
+                                  final slot = InterviewSlot.fromMap(slotData);
+                                  
+                                  return RadioListTile<String>(
+                                    title: Text(
+                                      DateFormat('MMM d, yyyy').format(slot.startTime),
+                                      style: const TextStyle(fontWeight: FontWeight.bold),
+                                    ),
+                                    subtitle: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          '${DateFormat('h:mm a').format(slot.startTime)} - ${DateFormat('h:mm a').format(slot.endTime)}',
+                                        ),
+                                        if (slot.meetingLink != null)
+                                          Text(
+                                            'Online Interview',
+                                            style: TextStyle(
+                                              color: Colors.blue,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                    value: slot.id,
+                                    groupValue: selectedSlotId,
+                                    onChanged: (value) {
+                                      setState(() {
+                                        selectedSlotId = value;
+                                      });
+                                    },
+                                  );
+                                },
+                              ),
                             ),
+                            const SizedBox(height: 16),
                           ],
-                        ),
-                      )
-                    else
-                      ElevatedButton.icon(
-                        icon: const Icon(Icons.upload_file),
-                        label: const Text('Upload Resume (PDF)'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.grey[200],
-                          foregroundColor: Colors.black87,
-                        ),
-                        onPressed: () async {
-                          try {
-                            FilePickerResult? result = await FilePicker.platform.pickFiles(
-                              type: FileType.custom,
-                              allowedExtensions: ['pdf'],
-                            );
-                            
-                            if (result != null) {
-                              setState(() {
-                                selectedResume = File(result.files.single.path!);
-                                resumeFileName = result.files.single.name;
-                              });
-                            }
-                          } catch (e) {
-                            print('Error picking file: $e');
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Error selecting file: $e')),
-                            );
-                          }
-                        },
+                        );
+                      } else if (isExpired) {
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8.0),
+                          child: Card(
+                            color: Colors.red.shade50,
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Row(
+                                children: [
+                                  Icon(Icons.warning, color: Colors.red),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      'This job deadline has passed. Interview slots are no longer available.',
+                                      style: TextStyle(color: Colors.red.shade800),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+                      
+                      return const SizedBox.shrink();
+                    },
+                  ),
+                  
+                  // Resume Upload Section
+                  const Text(
+                    'Resume (Optional)',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  
+                  // Show selected file or upload button
+                  if (selectedResume != null)
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey),
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                  ],
-                ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.insert_drive_file, color: Colors.blue),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              resumeFileName ?? 'resume.pdf',
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close, color: Colors.red),
+                            onPressed: () {
+                              setState(() {
+                                selectedResume = null;
+                                resumeFileName = null;
+                              });
+                            },
+                          ),
+                        ],
+                      ),
+                    )
+                  else
+                    ElevatedButton.icon(
+                      icon: const Icon(Icons.upload_file),
+                      label: const Text('Upload Resume (PDF)'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.grey[200],
+                        foregroundColor: Colors.black87,
+                      ),
+                      onPressed: () async {
+                        try {
+                          FilePickerResult? result = await FilePicker.platform.pickFiles(
+                            type: FileType.custom,
+                            allowedExtensions: ['pdf'],
+                          );
+                          
+                          if (result != null) {
+                            setState(() {
+                              selectedResume = File(result.files.single.path!);
+                              resumeFileName = result.files.single.name;
+                            });
+                          }
+                        } catch (e) {
+                          print('Error picking file: $e');
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Error selecting file: $e')),
+                          );
+                        }
+                      },
+                    ),
+                ],
               ),
-              actions: [
-                TextButton(
-                  child: const Text('Cancel'),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-                ElevatedButton(
-                  child: const Text('Submit Application'),
-                  onPressed: () async {
-                    Navigator.of(context).pop();
-                    await _submitApplication(
-                      jobId,
-                      coverLetterController.text,
-                      selectedResume,
-                      resumeFileName,
-                    );
-                  },
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
+            ),
+            actions: [
+              TextButton(
+                child: const Text('Cancel'),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+              ElevatedButton(
+                child: const Text('Submit Application'),
+                onPressed: () async {
+                  Navigator.of(context).pop();
+                  await _submitApplication(
+                    jobId,
+                    coverLetterController.text,
+                    selectedResume,
+                    resumeFileName,
+                    selectedSlotId,
+                  );
+                },
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
   
   // Submit job application with resume upload
 // Enhanced resume upload method with better error handling
 
-Future<void> _submitApplication(String jobId, String coverLetter, File? resume, String? resumeFileName) async {
+Future<void> _submitApplication(
+    String jobId, 
+    String coverLetter, 
+    File? resume, 
+    String? resumeFileName,
+    String? selectedSlotId, // Make sure this parameter is added
+) async {
   try {
     print('=== STARTING APPLICATION SUBMISSION ===');
     print('Job ID: $jobId');
     print('Has Resume File: ${resume != null}');
     print('Resume Filename: $resumeFileName');
+    print('Selected Slot ID: $selectedSlotId'); // Add this debug line
     
     showDialog(
       context: context,
@@ -852,11 +1005,14 @@ Future<void> _submitApplication(String jobId, String coverLetter, File? resume, 
     // Submit application even if resume upload failed
     print('=== SUBMITTING APPLICATION DATA ===');
     print('Resume URL: ${resumeUrl ?? "none"}');
+    print('Selected Slot ID: ${selectedSlotId ?? "none"}');
     
-    final result = await JobApplicationService.submitApplication(
+    // KEY CHANGE: Use submitApplicationWithInterview instead of submitApplication
+    final result = await JobApplicationService.submitApplicationWithInterview(
       jobId: jobId,
       coverLetter: coverLetter,
       resumeUrl: resumeUrl,
+      selectedSlotId: selectedSlotId, // Pass the selected slot ID
     );
     
     print('Application submission result: $result');
@@ -875,11 +1031,22 @@ Future<void> _submitApplication(String jobId, String coverLetter, File? resume, 
       });
       
       if (mounted) {
+        String message = 'Application submitted successfully!';
+        
+        // Check if resume and interview slot messages should be added
+        if (resumeUrl != null) {
+          message = 'Application submitted with resume!';
+        }
+        
+        if (selectedSlotId != null) {
+          message = resumeUrl != null 
+            ? 'Application submitted with resume and interview scheduled!' 
+            : 'Application submitted with interview scheduled!';
+        }
+        
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(resumeUrl != null 
-              ? 'Application submitted with resume!' 
-              : 'Application submitted successfully!'),
+            content: Text(message),
             backgroundColor: Colors.green,
           ),
         );

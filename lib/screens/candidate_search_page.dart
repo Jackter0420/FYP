@@ -10,6 +10,7 @@ import 'package:provider/provider.dart';
 import 'package:prototype_2/providers/user_provider.dart';
 import 'package:prototype_2/services/recommendation_service.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:intl/intl.dart';
 
 class CandidateSearchPage extends StatefulWidget {
   const CandidateSearchPage({Key? key}) : super(key: key);
@@ -30,6 +31,7 @@ class _CandidateSearchPageState extends State<CandidateSearchPage> with SingleTi
   List<String> _selectedSkills = [];
   List<Map<String, dynamic>> _searchResults = [];
   bool _isSearching = false;
+  bool _hasSearched = false; // Track if a search has been performed
   
   // For filtering
   String _sortCriteria = 'match'; // 'match', 'name', 'recentlyActive'
@@ -51,6 +53,7 @@ class _CandidateSearchPageState extends State<CandidateSearchPage> with SingleTi
           _searchResults = [];
           _searchController.clear();
           _selectedSkills = [];
+          _hasSearched = false;
         });
       }
     });
@@ -63,99 +66,209 @@ class _CandidateSearchPageState extends State<CandidateSearchPage> with SingleTi
     super.dispose();
   }
   
-  Future<void> _fetchEmployerJobs() async {
-    setState(() {
-      _isLoading = true;
-    });
+
+String formatJobTimestamp(String timestamp) {
+  try {
+    // Parse the ISO timestamp from Firestore
+    DateTime postDate = DateTime.parse(timestamp);
     
-    try {
-      // Get current user ID
-      final currentUser = FirebaseAuth.instance.currentUser;
-      if (currentUser == null) {
-        throw Exception("No user logged in");
-      }
-      
-      // Fetch jobs from the user's jobs subcollection
-      final QuerySnapshot snapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(currentUser.uid)
-          .collection('jobs')
-          .where('status', isEqualTo: 'active')
-          .get();
-      
-      List<Map<String, dynamic>> jobs = [];
-      
-      for (var doc in snapshot.docs) {
-        Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
-        jobs.add({
-          'id': doc.id,
-          'title': data['job_title'] ?? 'No Title',
-          'company': data['company_name'] ?? 'Your Company',
-          'location': data['job_location'] ?? 'No Location',
-          ...data,
-        });
-      }
-      
-      setState(() {
-        _employerJobs = jobs;
-        _isLoading = false;
-        
-        // Auto-select the first job if available
-        if (jobs.isNotEmpty && _selectedJobId == null) {
-          _selectedJobId = jobs[0]['id'];
-          _fetchRecommendedJobSeekers();
-        }
-      });
-    } catch (e) {
-      print("Error fetching employer jobs: $e");
-      setState(() {
-        _isLoading = false;
-      });
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error loading jobs: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+    // Get the current time
+    DateTime now = DateTime.now();
+    
+    // Calculate the difference
+    Duration difference = now.difference(postDate);
+    
+    // Format based on how long ago the job was posted
+    if (difference.inDays > 0) {
+      return '${difference.inDays} ${difference.inDays == 1 ? 'day' : 'days'} ago';
+    } else if (difference.inHours > 0) {
+      return '${difference.inHours} ${difference.inHours == 1 ? 'hour' : 'hours'} ago';
+    } else if (difference.inMinutes > 0) {
+      return '${difference.inMinutes} ${difference.inMinutes == 1 ? 'minute' : 'minutes'} ago';
+    } else {
+      return 'Just now';
     }
+  } catch (e) {
+    print("Error formatting timestamp: $e");
+    return 'Recently';
   }
+}
+
+// Format deadline date for display
+String formatDeadline(String deadlineStr) {
+  try {
+    if (deadlineStr.isEmpty) return 'No deadline';
+    
+    DateTime deadline = DateTime.parse(deadlineStr);
+    return DateFormat('MMM d, yyyy').format(deadline);
+  } catch (e) {
+    print("Error formatting deadline: $e");
+    return 'Invalid date';
+  }
+}
+
+// Check if job is active based on deadline
+bool isJobActive(String deadlineStr) {
+  try {
+    if (deadlineStr.isEmpty) return true; // If no deadline, job is active
+    
+    DateTime deadline = DateTime.parse(deadlineStr);
+    DateTime now = DateTime.now();
+    
+    return now.isBefore(deadline); // Job is active if current date is before deadline
+  } catch (e) {
+    print("Error checking job status: $e");
+    return true; // Default to active if there's an error
+  }
+}
+
+
+
+// Fetch only active jobs for the employer
+Future<void> _fetchEmployerJobs() async {
+  setState(() {
+    _isLoading = true;
+  });
   
-  Future<void> _fetchRecommendedJobSeekers() async {
-    if (_selectedJobId == null) return;
+  try {
+    // Get current user ID
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) {
+      throw Exception("No user logged in");
+    }
+    
+    // First, fetch ALL jobs to calculate correct job numbers
+    final allJobsSnapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(currentUser.uid)
+        .collection('jobs')
+        .orderBy('post_date', descending: true)
+        .get();
+    
+    // Then, fetch only ACTIVE jobs for display
+    final activeJobsSnapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(currentUser.uid)
+        .collection('jobs')
+        .where('status', isEqualTo: 'active')
+        .orderBy('post_date', descending: true)
+        .get();
+    
+    // Create a map to store job numbers based on ALL jobs (not just active ones)
+    Map<String, int> jobNumbers = {};
+    int jobIndex = 1;
+    
+    // Assign job numbers to ALL jobs based on their posting order
+    for (var doc in allJobsSnapshot.docs) {
+      jobNumbers[doc.id] = jobIndex;
+      jobIndex++;
+    }
+    
+    List<Map<String, dynamic>> jobs = [];
+    
+    // Process only active jobs for display
+    for (var doc in activeJobsSnapshot.docs) {
+      Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+      String postDate = data['post_date'] ?? '';
+      String formattedDate = postDate.isNotEmpty ? formatJobTimestamp(postDate) : 'Recently';
+      
+      // Get deadline date
+      String deadline = data['deadline'] ?? '';
+      bool isActive = isJobActive(deadline);
+      
+      jobs.add({
+        'id': doc.id,
+        'title': data['job_title'] ?? 'No Title',
+        'company': data['company_name'] ?? 'Your Company',
+        'location': data['job_location'] ?? 'No Location',
+        'jobNumber': jobNumbers[doc.id] ?? 0, // Use the correct job number from ALL jobs
+        'post_date': postDate,
+        'deadline': deadline,
+        'formatted_deadline': formatDeadline(deadline),
+        'is_active': isActive,
+        ...data,
+      });
+    }
     
     setState(() {
-      _isLoading = true;
+      _employerJobs = jobs;
+      _isLoading = false;
+      
+      // Auto-select the first job if available
+      if (jobs.isNotEmpty && _selectedJobId == null) {
+        _selectedJobId = jobs[0]['id'];
+        _fetchRecommendedJobSeekers();
+      }
+      // If jobs becomes empty but we had a selected job before, clear it
+      else if (jobs.isEmpty && _selectedJobId != null) {
+        _selectedJobId = null;
+        _recommendedJobSeekers = [];
+      }
+    });
+  } catch (e) {
+    print("Error fetching employer jobs: $e");
+    setState(() {
+      _isLoading = false;
     });
     
-    try {
-      final matches = await RecommendationService.getRecommendedJobSeekersForJob(_selectedJobId!);
-      
-      // Sort based on selected criteria
-      _sortMatches(matches);
-      
-      setState(() {
-        _recommendedJobSeekers = matches;
-        _isLoading = false;
-      });
-    } catch (e) {
-      print("Error fetching recommendations: $e");
-      setState(() {
-        _isLoading = false;
-      });
-      
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error loading recommendations: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error loading jobs: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
+}
+// Add this helper function to check if a job is active based on deadline
+bool _isJobActive(String deadlineStr) {
+  try {
+    if (deadlineStr.isEmpty) return true; // If no deadline, job is active
+    
+    DateTime deadline = DateTime.parse(deadlineStr);
+    DateTime now = DateTime.now();
+    
+    return now.isBefore(deadline); // Job is active if current date is before deadline
+  } catch (e) {
+    print("Error checking job status: $e");
+    return true; // Default to active if there's an error
+  }
+}
+  
+Future<void> _fetchRecommendedJobSeekers() async {
+  if (_selectedJobId == null) return;
+  
+  setState(() {
+    _isLoading = true;
+  });
+  
+  try {
+    final matches = await RecommendationService.getRecommendedJobSeekersForJob(_selectedJobId!);
+    
+    // Sort based on selected criteria
+    _sortMatches(matches);
+    
+    setState(() {
+      _recommendedJobSeekers = matches;
+      _isLoading = false;
+    });
+  } catch (e) {
+    print("Error fetching recommendations: $e");
+    setState(() {
+      _isLoading = false;
+    });
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error loading recommendations: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+}
   
   // Sort matches based on the selected criteria
   void _sortMatches(List<JobMatch> matches) {
@@ -173,9 +286,7 @@ class _CandidateSearchPageState extends State<CandidateSearchPage> with SingleTi
     }
   }
   
-  bool _hasSearched = false; // Track if a search has been performed
-
-// Then modify the _performManualSearch method to set this flag:
+// Perform manual search for job seekers
 Future<void> _performManualSearch() async {
   final searchTerm = _searchController.text.trim();
   
@@ -231,139 +342,189 @@ Future<void> _performManualSearch() async {
     });
   }
   
-  // Build the job selector dropdown
-  Widget _buildJobSelector() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 1,
-            offset: const Offset(0, 1),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Select a Job Posting:',
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Find candidates that match your job requirements',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // Sort options dropdown
-              PopupMenuButton<String>(
-                icon: Icon(Icons.sort),
-                tooltip: 'Sort Candidates',
-                onSelected: (value) {
-                  setState(() {
-                    _sortCriteria = value;
-                    // Re-sort the current list
-                    _sortMatches(_recommendedJobSeekers);
-                  });
-                },
-                itemBuilder: (context) => [
-                  PopupMenuItem(
-                    value: 'match',
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.percent,
-                          color: _sortCriteria == 'match' ? Theme.of(context).primaryColor : null,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Match Percentage',
-                          style: TextStyle(
-                            fontWeight: _sortCriteria == 'match' ? FontWeight.bold : FontWeight.normal,
-                            color: _sortCriteria == 'match' ? Theme.of(context).primaryColor : null,
-                          ),
-                        ),
-                      ],
+// Helper function to format deadline for display
+String _formatDeadline(String deadlineStr) {
+  try {
+    if (deadlineStr.isEmpty) return 'No deadline';
+    
+    DateTime deadline = DateTime.parse(deadlineStr);
+    DateTime now = DateTime.now();
+    Duration difference = deadline.difference(now);
+    
+    // Format differently based on how much time is left
+    if (difference.inDays > 30) {
+      // More than a month left - show full date
+      return DateFormat('MMM d, yyyy').format(deadline);
+    } else if (difference.inDays > 1) {
+      // Days left
+      return '${difference.inDays} days left (${DateFormat('MMM d').format(deadline)})';
+    } else if (difference.inDays == 1) {
+      // 1 day left
+      return 'Tomorrow (${DateFormat('MMM d').format(deadline)})';
+    } else if (difference.inHours > 0) {
+      // Hours left
+      return '${difference.inHours} hours left';
+    } else if (difference.inMinutes > 0) {
+      // Minutes left
+      return '${difference.inMinutes} minutes left';
+    } else {
+      // Deadline is now or passed
+      return 'Closing today';
+    }
+  } catch (e) {
+    print("Error formatting deadline: $e");
+    return 'Invalid deadline';
+  }
+}
+
+// Update the job selector to show deadline information
+Widget _buildJobSelector() {
+  return Container(
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+    decoration: BoxDecoration(
+      color: Colors.white,
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withOpacity(0.05),
+          blurRadius: 1,
+          offset: const Offset(0, 1),
+        ),
+      ],
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Select a Job Posting:',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
                     ),
                   ),
-                  PopupMenuItem(
-                    value: 'name',
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.sort_by_alpha,
-                          color: _sortCriteria == 'name' ? Theme.of(context).primaryColor : null,
-                          size: 18,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Name (A-Z)',
-                          style: TextStyle(
-                            fontWeight: _sortCriteria == 'name' ? FontWeight.bold : FontWeight.normal,
-                            color: _sortCriteria == 'name' ? Theme.of(context).primaryColor : null,
-                          ),
-                        ),
-                      ],
+                  const SizedBox(height: 6),
+                  Text(
+                    'Find candidates that match your job requirements',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Colors.grey[600],
                     ),
                   ),
                 ],
               ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<String>(
-            decoration: InputDecoration(
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              isDense: true,
             ),
-            value: _selectedJobId,
-            items: _employerJobs.map((job) {
-              return DropdownMenuItem<String>(
-                value: job['id'],
-                child: Text(
-                  job['title'],
-                  overflow: TextOverflow.ellipsis,
-                ),
-              );
-            }).toList(),
-            onChanged: (value) {
-              if (value != null) {
-                setState(() {
-                  _selectedJobId = value;
-                });
-                _fetchRecommendedJobSeekers();
-              }
-            },
+            // Sort options dropdown
+            // PopupMenuButton<String>(
+            //   icon: Icon(Icons.sort),
+            //   tooltip: 'Sort Candidates',
+            //   onSelected: (value) {
+            //     setState(() {
+            //       _sortCriteria = value;
+            //       // Re-sort the current list
+            //       _sortMatches(_recommendedJobSeekers);
+            //     });
+            //   },
+            //   itemBuilder: (context) => [
+            //     PopupMenuItem(
+            //       value: 'match',
+            //       child: Row(
+            //         children: [
+            //           Icon(
+            //             Icons.percent,
+            //             color: _sortCriteria == 'match' ? Theme.of(context).primaryColor : null,
+            //             size: 18,
+            //           ),
+            //           const SizedBox(width: 8),
+            //           Text(
+            //             'Match Percentage',
+            //             style: TextStyle(
+            //               fontWeight: _sortCriteria == 'match' ? FontWeight.bold : FontWeight.normal,
+            //               color: _sortCriteria == 'match' ? Theme.of(context).primaryColor : null,
+            //             ),
+            //           ),
+            //         ],
+            //       ),
+            //     ),
+            //     PopupMenuItem(
+            //       value: 'name',
+            //       child: Row(
+            //         children: [
+            //           Icon(
+            //             Icons.sort_by_alpha,
+            //             color: _sortCriteria == 'name' ? Theme.of(context).primaryColor : null,
+            //             size: 18,
+            //           ),
+            //           const SizedBox(width: 8),
+            //           Text(
+            //             'Name (A-Z)',
+            //             style: TextStyle(
+            //               fontWeight: _sortCriteria == 'name' ? FontWeight.bold : FontWeight.normal,
+            //               color: _sortCriteria == 'name' ? Theme.of(context).primaryColor : null,
+            //             ),
+            //           ),
+            //         ],
+            //       ),
+            //     ),
+            //   ],
+            // ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(
+          decoration: InputDecoration(
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            isDense: true,
           ),
-        ],
-      ),
-    );
-  }
-
-  // lib/screens/candidate_search_page.dart - Part 2
-  
-  // Build recommendations list
+          value: _selectedJobId,
+          items: _employerJobs.map((job) {
+            // Format deadline for display in dropdown
+            String deadlineInfo = '';
+            if (job['deadline'] != null && job['deadline'].toString().isNotEmpty) {
+              try {
+                final deadline = DateTime.parse(job['deadline']);
+                final now = DateTime.now();
+                final difference = deadline.difference(now).inDays;
+                
+                if (difference > 0) {
+                  deadlineInfo = ' (${difference}d left)';
+                } else if (difference == 0) {
+                  deadlineInfo = ' (Today)';
+                }
+              } catch (e) {
+                print("Error parsing deadline: $e");
+              }
+            }
+            
+            return DropdownMenuItem<String>(
+              value: job['id'],
+              child: Text(
+                "#${job['jobNumber']} - ${job['title']}$deadlineInfo",
+                overflow: TextOverflow.ellipsis,
+              ),
+            );
+          }).toList(),
+          onChanged: (value) {
+            if (value != null) {
+              setState(() {
+                _selectedJobId = value;
+              });
+              _fetchRecommendedJobSeekers();
+            }
+          },
+        ),
+      ],
+    ),
+  );
+}
+ // Build recommendations list
   Widget _buildRecommendationsList() {
     if (_recommendedJobSeekers.isEmpty) {
       return Center(
@@ -901,204 +1062,213 @@ Future<void> _performManualSearch() async {
 }
   
   // Show job seeker profile dialog from recommendations
-  void _showJobSeekerProfile(JobMatch match) {
-    showDialog(
-      context: context,
-      builder: (context) => Dialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Container(
-          padding: const EdgeInsets.all(24),
-          constraints: BoxConstraints(maxWidth: 500, maxHeight: 600),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  CircleAvatar(
-                    radius: 32,
-                    backgroundColor: Theme.of(context).primaryColor.withOpacity(0.2),
-                    child: Text(
-                      match.jobSeekerName.isNotEmpty 
-                          ? match.jobSeekerName[0].toUpperCase() 
-                          : '?',
-                      style: TextStyle(
-                        fontSize: 32,
-                        fontWeight: FontWeight.bold,
-                        color: Theme.of(context).primaryColor,
-                      ),
+void _showJobSeekerProfile(JobMatch match) {
+  // Find the job number based on the job ID
+  int jobNumber = 0;
+  for (var job in _employerJobs) {
+    if (job['id'] == match.jobId) {
+      jobNumber = job['jobNumber'];
+      break;
+    }
+  }
+
+  showDialog(
+    context: context,
+    builder: (context) => Dialog(
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Container(
+        padding: const EdgeInsets.all(24),
+        constraints: BoxConstraints(maxWidth: 500, maxHeight: 600),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 32,
+                  backgroundColor: Theme.of(context).primaryColor.withOpacity(0.2),
+                  child: Text(
+                    match.jobSeekerName.isNotEmpty 
+                        ? match.jobSeekerName[0].toUpperCase() 
+                        : '?',
+                    style: TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).primaryColor,
                     ),
                   ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          match.jobSeekerName,
-                          style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(
-                          match.jobSeekerData['preferredJobTitle'] ?? 'Job Seeker',
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: Colors.blue[700],
-                          ),
-                        ),
-                        if (match.jobSeekerData.containsKey('email') && 
-                            match.jobSeekerData['email'] != null)
-                          Text(
-                            match.jobSeekerData['email'],
-                            style: TextStyle(fontSize: 14),
-                          ),
-                      ],
-                    ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: _getMatchColor(match.matchPercentage),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Text(
-                      '${match.matchPercentage.toInt()}% Match',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const Divider(height: 32),
-              Expanded(
-                child: SingleChildScrollView(
+                ),
+                const SizedBox(width: 16),
+                Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Skills section
                       Text(
-                        'Skills',
+                        match.jobSeekerName,
                         style: TextStyle(
-                          fontSize: 18,
+                          fontSize: 24,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: match.jobSeekerSkills.map((skill) {
-                          final isMatchingSkill = match.jobRequiredSkills.any(
-                            (reqSkill) => reqSkill.toLowerCase().contains(skill.toLowerCase()) || 
-                                      skill.toLowerCase().contains(reqSkill.toLowerCase())
-                          );
-                          
-                          return Chip(
-                            label: Text(skill),
-                            backgroundColor: isMatchingSkill 
-                                ? Colors.green.withOpacity(0.2) 
-                                : Colors.grey.withOpacity(0.2),
-                            labelStyle: TextStyle(
-                              color: isMatchingSkill ? Colors.green[800] : Colors.black87,
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                      const SizedBox(height: 16),
-                      
-                      // Experience section
                       Text(
-                        'Experience',
+                        match.jobSeekerData['preferredJobTitle'] ?? 'Job Seeker',
                         style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                          color: Colors.blue[700],
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        match.jobSeekerData['workingExperience']?.toString() ?? 'No experience information provided.',
-                      ),
-                      const SizedBox(height: 16),
-                      
-                      // Match details section
-                      Text(
-                        'Match Details',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
+                      if (match.jobSeekerData.containsKey('email') && 
+                          match.jobSeekerData['email'] != null)
+                        Text(
+                          match.jobSeekerData['email'],
+                          style: TextStyle(fontSize: 14),
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      Card(
-                        color: Colors.grey[100],
-                        child: Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('Matching for:', style: TextStyle(fontWeight: FontWeight.bold)),
-                              Text(match.jobTitle),
-                              const SizedBox(height: 8),
-                              Text('Required Skills:', style: TextStyle(fontWeight: FontWeight.bold)),
-                              Text(match.jobRequiredSkills.join(', ')),
-                              const SizedBox(height: 8),
-                              Text('Candidate Skills:', style: TextStyle(fontWeight: FontWeight.bold)),
-                              Text(match.jobSeekerSkills.join(', ')),
-                              const SizedBox(height: 8),
-                              LinearProgressIndicator(
-                                value: match.matchPercentage / 100,
-                                backgroundColor: Colors.grey[300],
-                                valueColor: AlwaysStoppedAnimation<Color>(_getMatchColor(match.matchPercentage)),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '${match.matchPercentage.toInt()}% Overall Match',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: _getMatchColor(match.matchPercentage),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
                     ],
                   ),
                 ),
-              ),
-              const Divider(height: 32),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: Text('Close'),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _getMatchColor(match.matchPercentage),
+                    borderRadius: BorderRadius.circular(16),
                   ),
-                  const SizedBox(width: 8),
-                  ElevatedButton.icon(
-                    icon: Icon(Icons.email),
-                    label: Text('Contact Candidate'),
-                    onPressed: () {
-                      final email = match.jobSeekerData['email'];
-                      if (email != null) {
-                        Navigator.pop(context);
-                        _launchUrl('mailto:$email');
-                      }
-                    },
+                  child: Text(
+                    '${match.matchPercentage.toInt()}% Match',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
-                ],
+                ),
+              ],
+            ),
+            const Divider(height: 32),
+            Expanded(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Skills section
+                    Text(
+                      'Skills',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: match.jobSeekerSkills.map((skill) {
+                        final isMatchingSkill = match.jobRequiredSkills.any(
+                          (reqSkill) => reqSkill.toLowerCase().contains(skill.toLowerCase()) || 
+                                    skill.toLowerCase().contains(reqSkill.toLowerCase())
+                        );
+                        
+                        return Chip(
+                          label: Text(skill),
+                          backgroundColor: isMatchingSkill 
+                              ? Colors.green.withOpacity(0.2) 
+                              : Colors.grey.withOpacity(0.2),
+                          labelStyle: TextStyle(
+                            color: isMatchingSkill ? Colors.green[800] : Colors.black87,
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 16),
+                    
+                    // Experience section
+                    Text(
+                      'Experience',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      match.jobSeekerData['workingExperience']?.toString() ?? 'No experience information provided.',
+                    ),
+                    const SizedBox(height: 16),
+                    
+                    // Match details section - now with job number
+                    Text(
+                      'Match Details',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Card(
+                      color: Colors.grey[100],
+                      child: Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Matching for:', style: TextStyle(fontWeight: FontWeight.bold)),
+                            Text(jobNumber > 0 ? "#$jobNumber - ${match.jobTitle}" : match.jobTitle),
+                            const SizedBox(height: 8),
+                            Text('Required Skills:', style: TextStyle(fontWeight: FontWeight.bold)),
+                            Text(match.jobRequiredSkills.join(', ')),
+                            const SizedBox(height: 8),
+                            Text('Candidate Skills:', style: TextStyle(fontWeight: FontWeight.bold)),
+                            Text(match.jobSeekerSkills.join(', ')),
+                            const SizedBox(height: 8),
+                            LinearProgressIndicator(
+                              value: match.matchPercentage / 100,
+                              backgroundColor: Colors.grey[300],
+                              valueColor: AlwaysStoppedAnimation<Color>(_getMatchColor(match.matchPercentage)),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${match.matchPercentage.toInt()}% Overall Match',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: _getMatchColor(match.matchPercentage),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            ],
-          ),
+            ),
+            const Divider(height: 32),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text('Close'),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  icon: Icon(Icons.email),
+                  label: Text('Contact Candidate'),
+                  onPressed: () {
+                    final email = match.jobSeekerData['email'];
+                    if (email != null) {
+                      Navigator.pop(context);
+                      _launchUrl('mailto:$email');
+                    }
+                  },
+                ),
+              ],
+            ),
+          ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
   
   // Show job seeker profile dialog from search results
   void _showJobSeekerProfileFromSearch(Map<String, dynamic> jobSeeker) {

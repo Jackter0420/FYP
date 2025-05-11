@@ -3,12 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
+import 'package:prototype_2/models/interview_slot.dart';
 import 'package:prototype_2/widgets/employer_app_bar.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:prototype_2/screens/employer_chat_page.dart';
 import 'package:prototype_2/screens/manage_jobs_page.dart';
 import 'package:prototype_2/screens/candidate_search_page.dart';
-
 
 class UpdateStatusPage extends StatefulWidget {
   @override
@@ -19,6 +19,16 @@ class _UpdateStatusPageState extends State<UpdateStatusPage> {
   int _currentIndex = 2;
   bool _isLoading = true;
   List<Map<String, dynamic>> _applications = [];
+  
+  // Stats for application summary
+  int _totalApplications = 0;
+  int _pendingCount = 0;
+  int _reviewingCount = 0;
+  int _approvedCount = 0;
+  int _rejectedCount = 0;
+  
+  // For filtering applications
+  String _selectedFilter = 'all';
   
   @override
   void initState() {
@@ -47,6 +57,12 @@ class _UpdateStatusPageState extends State<UpdateStatusPage> {
 
       List<Map<String, dynamic>> applications = [];
       
+      // Reset counters
+      _pendingCount = 0;
+      _reviewingCount = 0;
+      _approvedCount = 0;
+      _rejectedCount = 0;
+      
       for (var doc in snapshot.docs) {
         Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
         
@@ -74,10 +90,28 @@ class _UpdateStatusPageState extends State<UpdateStatusPage> {
           'applicationData': data,
           'jobSeekerData': jobSeekerData,
         });
+        
+        // Update counters based on status
+        String status = (data['status'] ?? 'pending').toLowerCase();
+        switch (status) {
+          case 'pending':
+            _pendingCount++;
+            break;
+          case 'reviewing':
+            _reviewingCount++;
+            break;
+          case 'shortlisted':
+            _approvedCount++;
+            break;
+          case 'declined':
+            _rejectedCount++;
+            break;
+        }
       }
 
       setState(() {
         _applications = applications;
+        _totalApplications = applications.length;
         _isLoading = false;
       });
     } catch (e) {
@@ -91,98 +125,99 @@ class _UpdateStatusPageState extends State<UpdateStatusPage> {
     }
   }
 
- Future<void> _updateApplicationStatus(String applicationId, String newStatus) async {
-  try {
-    final currentUser = FirebaseAuth.instance.currentUser;
-    if (currentUser == null) return;
-
-    // Show loading indicator
-    setState(() {
-      _isLoading = true;
-    });
-
-    // Get the application data first to get jobSeekerId
-    final appDoc = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(currentUser.uid)
-        .collection('applications')
-        .doc(applicationId)
-        .get();
-    
-    if (!appDoc.exists) {
-      throw Exception('Application not found');
-    }
-    
-    final appData = appDoc.data();
-    final jobSeekerId = appData?['job_seeker_id'];
-    
-    if (jobSeekerId == null) {
-      throw Exception('Job seeker ID not found in application data');
-    }
-    
-    // Update timestamp
-    final updateTime = DateTime.now().toIso8601String();
-    final updateData = {
-      'status': newStatus,
-      'last_update_date': updateTime,
-    };
-    
-    // 1. Update in employer's subcollection
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(currentUser.uid)
-        .collection('applications')
-        .doc(applicationId)
-        .update(updateData);
-    
-    // 2. Update in main applications collection
+  Future<void> _updateApplicationStatus(String applicationId, String newStatus) async {
     try {
-      await FirebaseFirestore.instance
+      final currentUser = FirebaseAuth.instance.currentUser;
+      if (currentUser == null) return;
+
+      // Show loading indicator
+      setState(() {
+        _isLoading = true;
+      });
+
+      // Get the application data first to get jobSeekerId
+      final appDoc = await FirebaseFirestore.instance
+          .collection('users')
+          .doc(currentUser.uid)
           .collection('applications')
           .doc(applicationId)
-          .update(updateData);
-    } catch (e) {
-      print('Warning: Could not update main applications collection: $e');
-      // Continue anyway since it's not critical
-    }
-    
-    // 3. Update in job seeker's subcollection
-    try {
+          .get();
+      
+      if (!appDoc.exists) {
+        throw Exception('Application not found');
+      }
+      
+      final appData = appDoc.data();
+      final jobSeekerId = appData?['job_seeker_id'];
+      
+      if (jobSeekerId == null) {
+        throw Exception('Job seeker ID not found in application data');
+      }
+      
+      // Update timestamp
+      final updateTime = DateTime.now().toIso8601String();
+      final updateData = {
+        'status': newStatus,
+        'last_update_date': updateTime,
+      };
+      
+      // 1. Update in employer's subcollection
       await FirebaseFirestore.instance
           .collection('users')
-          .doc(jobSeekerId)
+          .doc(currentUser.uid)
           .collection('applications')
           .doc(applicationId)
           .update(updateData);
+      
+      // 2. Update in main applications collection
+      try {
+        await FirebaseFirestore.instance
+            .collection('applications')
+            .doc(applicationId)
+            .update(updateData);
+      } catch (e) {
+        print('Warning: Could not update main applications collection: $e');
+        // Continue anyway since it's not critical
+      }
+      
+      // 3. Update in job seeker's subcollection
+      try {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(jobSeekerId)
+            .collection('applications')
+            .doc(applicationId)
+            .update(updateData);
+      } catch (e) {
+        print('Warning: Could not update job seeker subcollection: $e');
+        // Continue anyway since employer data is updated
+      }
+      
+      // Show success message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Application status updated to ${newStatus.toUpperCase()}'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      
+      // Refresh the list
+      await _fetchApplications();
     } catch (e) {
-      print('Warning: Could not update job seeker subcollection: $e');
-      // Continue anyway since employer data is updated
+      print('Error updating status: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error updating status: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
     }
-    
-    // Show success message
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Application status updated to ${newStatus.toUpperCase()}'),
-        backgroundColor: Colors.green,
-      ),
-    );
-    
-    // Refresh the list
-    await _fetchApplications();
-  } catch (e) {
-    print('Error updating status: $e');
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Error updating status: $e'),
-        backgroundColor: Colors.red,
-      ),
-    );
-  } finally {
-    setState(() {
-      _isLoading = false;
-    });
   }
-}
+  
   String _formatDate(String? dateString) {
     if (dateString == null || dateString.isEmpty) return 'N/A';
     try {
@@ -193,364 +228,620 @@ class _UpdateStatusPageState extends State<UpdateStatusPage> {
     }
   }
 
-  Future<void> _launchUrl(String url) async {
-  try {
-    final Uri uri = Uri.parse(url);
-    
-    // Check if the URL can be launched
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(
-        uri,
-        mode: LaunchMode.externalApplication, // Opens in external browser
-      );
-    } else {
-      throw 'Could not launch $url';
+  // Get filtered applications based on selected status
+  List<Map<String, dynamic>> _getFilteredApplications() {
+    if (_selectedFilter == 'all') {
+      return _applications;
     }
-  } catch (e) {
-    print('Error launching URL: $e');
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Error opening URL: ${e.toString()}'),
-        backgroundColor: Colors.red,
+    
+    return _applications.where((app) {
+      final status = app['applicationData']['status']?.toString().toLowerCase() ?? 'pending';
+      return status == _selectedFilter;
+    }).toList();
+  }
+  
+  Future<void> _launchUrl(String url) async {
+    try {
+      final Uri uri = Uri.parse(url);
+      
+      // Check if the URL can be launched
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(
+          uri,
+          mode: LaunchMode.externalApplication, // Opens in external browser
+        );
+      } else {
+        throw 'Could not launch $url';
+      }
+    } catch (e) {
+      print('Error launching URL: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error opening URL: ${e.toString()}'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+  
+  // Build compact stat item for application summary
+  Widget _buildCompactStatItem(String label, int count, Color color) {
+    return Column(
+      children: [
+        Text(
+          count.toString(),
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: Colors.grey[600],
+          ),
+        ),
+      ],
+    );
+  }
+  
+  // Build application summary card
+  Widget _buildApplicationSummary() {
+    return Card(
+      margin: const EdgeInsets.all(8.0),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 12.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Application Summary',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            // Single row with all statuses in a more compact layout
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _buildCompactStatItem('Total', _totalApplications, Colors.blue),
+                _buildCompactStatItem('Pending', _pendingCount, Colors.amber),
+                _buildCompactStatItem('Reviewing', _reviewingCount, Colors.blue),
+                _buildCompactStatItem('Shortlisted', _approvedCount, Colors.green),
+                _buildCompactStatItem('Declined', _rejectedCount, Colors.red),
+              ],
+            ),
+          ],
+        ),
       ),
     );
+  }
+  
+  // Build filter chips
+  Widget _buildFilterChips() {
+    final filters = ['all', 'pending', 'reviewing', 'Shortlisted', 'Declined'];
+    
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+      child: Row(
+        children: filters.map((filter) {
+          // Get count for this filter
+          int count = 0;
+          switch (filter) {
+            case 'all':
+              count = _totalApplications;
+              break;
+            case 'pending':
+              count = _pendingCount;
+              break;
+            case 'reviewing':
+              count = _reviewingCount;
+              break;
+            case 'shortlisted':
+              count = _approvedCount;
+              break;
+            case 'declined':
+              count = _rejectedCount;
+              break;
+          }
+          
+          // Get color for this filter
+          Color chipColor;
+          switch (filter) {
+            case 'pending':
+              chipColor = Colors.amber;
+              break;
+            case 'reviewing':
+              chipColor = Colors.blue;
+              break;
+            case 'shortlisted':
+              chipColor = Colors.green;
+              break;
+            case 'declined':
+              chipColor = Colors.red;
+              break;
+            case 'all':
+            default:
+              chipColor = Colors.grey;
+          }
+          
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4.0),
+            child: FilterChip(
+              label: Text('${filter.toUpperCase()} ($count)'),
+              selected: _selectedFilter == filter,
+              onSelected: (selected) {
+                setState(() {
+                  _selectedFilter = selected ? filter : 'all';
+                });
+              },
+              selectedColor: chipColor.withOpacity(0.3),
+              backgroundColor: Colors.white,
+              checkmarkColor: chipColor,
+              labelStyle: TextStyle(
+                fontWeight: _selectedFilter == filter ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+
+Future<InterviewSlot?> _getBookedInterview(Map<String, dynamic> appData) async {
+  try {
+    if (appData['booked_interview_id'] == null) {
+      return null;
+    }
+    
+    // Find the booked slot from job data
+    final jobDoc = await FirebaseFirestore.instance
+        .collection('jobs')
+        .doc(appData['job_id'])
+        .get();
+    
+    if (jobDoc.exists) {
+      final jobData = jobDoc.data();
+      final slots = jobData?['interview_slots'] as List?;
+      if (slots != null) {
+        final bookedSlotMap = slots.firstWhere(
+          (slot) => slot['id'] == appData['booked_interview_id'],
+          orElse: () => null,
+        );
+        
+        if (bookedSlotMap != null) {
+          return InterviewSlot.fromMap(bookedSlotMap);
+        }
+      }
+    }
+    return null;
+  } catch (e) {
+    print('Error getting booked interview: $e');
+    return null;
   }
 }
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFE7E7E7),
-      appBar: EmployerAppBar(
+Widget build(BuildContext context) {
+  return Scaffold(
+    backgroundColor: const Color(0xFFE7E7E7),
+    appBar: EmployerAppBar(
       title: 'Update Application Status',
       additionalActions: [
         IconButton(
           icon: const Icon(Icons.refresh),
           onPressed: _fetchApplications,
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          if (_isLoading)
-            const Expanded(
-              child: Center(child: CircularProgressIndicator()),
-            )
-          else if (_applications.isEmpty)
-            const Expanded(
-              child: Center(
-                child: Text('No applications found'),
-              ),
-            )
-          else
-            Expanded(
-              child: ListView.builder(
-                padding: const EdgeInsets.all(8.0),
-                itemCount: _applications.length,
-                itemBuilder: (context, index) {
-                  final application = _applications[index];
-                  final appData = application['applicationData'];
-                  final jobSeekerData = application['jobSeekerData'];
-                  
-                  return Card(
-                    margin: const EdgeInsets.symmetric(vertical: 8.0),
-                    child: ExpansionTile(
-                      title: Text(
-                        appData['job_seeker_name'] ?? 'Unknown Applicant',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 18,
-                        ),
+        ),
+      ],
+    ),
+    body: Column(
+      children: [
+        // Add application summary at the top
+        if (!_isLoading && _applications.isNotEmpty)
+          _buildApplicationSummary(),
+        
+        // Add filter chips below the summary
+        if (!_isLoading && _applications.isNotEmpty)
+          _buildFilterChips(),
+        
+        if (_isLoading)
+          const Expanded(
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (_applications.isEmpty)
+          const Expanded(
+            child: Center(
+              child: Text('No applications found'),
+            ),
+          )
+        else
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.all(8.0),
+              itemCount: _getFilteredApplications().length,
+              itemBuilder: (context, index) {
+                final application = _getFilteredApplications()[index];
+                final appData = application['applicationData'];
+                final jobSeekerData = application['jobSeekerData'];
+                
+                return Card(
+                  margin: const EdgeInsets.symmetric(vertical: 8.0),
+                  child: ExpansionTile(
+                    title: Text(
+                      appData['job_seeker_name'] ?? 'Unknown Applicant',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
                       ),
-                      subtitle: Text(
-                        appData['job_title'] ?? 'Unknown Position',
-                        style: const TextStyle(color: Colors.blue),
-                      ),
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.all(16.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // Applicant Details Section
-                              const Text(
-                                'Applicant Details',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
+                    ),
+                    subtitle: Text(
+                      appData['job_title'] ?? 'Unknown Position',
+                      style: const TextStyle(color: Colors.blue),
+                    ),
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Applicant Details Section
+                            const Text(
+                              'Applicant Details',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
                               ),
-                              const SizedBox(height: 8),
+                            ),
+                            const SizedBox(height: 8),
+                            _buildDetailRow(
+                              Icons.person,
+                              appData['job_seeker_name'] ?? 'N/A',
+                            ),
+                            _buildDetailRow(
+                              Icons.email,
+                              jobSeekerData['email'] ?? 'N/A',
+                            ),
+                            _buildDetailRow(
+                              Icons.phone,
+                              jobSeekerData['phoneNumber'] ?? 'N/A',
+                            ),
+                            _buildDetailRow(
+                              Icons.calendar_today,
+                              'Applied: ${_formatDate(appData['applied_date'])}',
+                            ),
+                            if (appData['last_update_date'] != null)
                               _buildDetailRow(
-                                Icons.person,
-                                appData['job_seeker_name'] ?? 'N/A',
+                                Icons.update,
+                                'Updated: ${_formatDate(appData['last_update_date'])}',
                               ),
-                              _buildDetailRow(
-                                Icons.email,
-                                jobSeekerData['email'] ?? 'N/A',
-                              ),
-                              _buildDetailRow(
-                                Icons.phone,
-                                jobSeekerData['phoneNumber'] ?? 'N/A',
-                              ),
-                              _buildDetailRow(
-                                Icons.calendar_today,
-                                'Applied: ${_formatDate(appData['applied_date'])}',
-                              ),
-                              if (appData['last_update_date'] != null)
-                                _buildDetailRow(
-                                  Icons.update,
-                                  'Updated: ${_formatDate(appData['last_update_date'])}',
-                                ),
-                              
-                              const SizedBox(height: 16),
-                              
-                              // Cover Letter Section
-                              if (appData['cover_letter'] != null && 
-                                  appData['cover_letter'].toString().isNotEmpty)
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Text(
-                                      'Cover Letter',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Container(
-                                      padding: const EdgeInsets.all(12),
-                                      decoration: BoxDecoration(
-                                        color: Colors.grey[100],
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Text(
-                                        appData['cover_letter'],
-                                        maxLines: 5,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              
-                              const SizedBox(height: 16),
-                              
-                              // Status Update Section
-                              const Text(
-                                'Application Status',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: DropdownButtonFormField<String>(
-                                      value: appData['status'] ?? 'pending',
-                                      decoration: InputDecoration(
-                                        border: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(8),
+                            
+                            const SizedBox(height: 16),
+                            
+                            // ADD INTERVIEW SECTION HERE
+                            FutureBuilder<InterviewSlot?>(
+                              future: _getBookedInterview(appData),
+                              builder: (context, snapshot) {
+                                if (snapshot.connectionState == ConnectionState.waiting) {
+                                  return const CircularProgressIndicator();
+                                }
+                                
+                                if (snapshot.hasData && snapshot.data != null) {
+                                  final slot = snapshot.data!;
+                                  return Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Card(
+                                        color: Colors.green.shade50,
+                                        child: Padding(
+                                          padding: const EdgeInsets.all(12),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                'Interview Scheduled',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Colors.green.shade800,
+                                                ),
+                                              ),
+                                              const SizedBox(height: 8),
+                                              Row(
+                                                children: [
+                                                  Icon(Icons.calendar_today, size: 16, color: Colors.green.shade700),
+                                                  const SizedBox(width: 8),
+                                                  Text('Date: ${DateFormat('MMM d, yyyy').format(slot.startTime)}'),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 4),
+                                              Row(
+                                                children: [
+                                                  Icon(Icons.access_time, size: 16, color: Colors.green.shade700),
+                                                  const SizedBox(width: 8),
+                                                  Text('Time: ${DateFormat('h:mm a').format(slot.startTime)} - ${DateFormat('h:mm a').format(slot.endTime)}'),
+                                                ],
+                                              ),
+                                              // Use 'location' instead of 'meetingLink'
+                                              if (slot.meetingLink != null && slot.meetingLink!.isNotEmpty) ...[
+                                                const SizedBox(height: 4),
+                                                Row(
+                                                  children: [
+                                                    Icon(Icons.link, size: 16, color: Colors.green.shade700),
+                                                    const SizedBox(width: 8),
+                                                    Expanded(
+                                                      child: InkWell(
+                                                        onTap: () => _launchUrl(slot.meetingLink!),
+                                                        child: Text(
+                                                          'Join Meeting',
+                                                          style: TextStyle(
+                                                            color: Colors.blue,
+                                                            decoration: TextDecoration.underline,
+                                                          ),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ],
+                                            ],
+                                          ),
                                         ),
                                       ),
-                                      items: [
-                                        'pending',
-                                        'reviewing',
-                                        'approved',
-                                        'rejected',
-                                      ].map((String value) {
-                                        return DropdownMenuItem<String>(
-                                          value: value,
-                                          child: Text(value.toUpperCase()),
-                                        );
-                                      }).toList(),
-                                      onChanged: (newValue) {
-                                        if (newValue != null) {
-                                          setState(() {
-                                            appData['status'] = newValue;
-                                          });
-                                        }
-                                      },
+                                      const SizedBox(height: 16),
+                                    ],
+                                  );
+                                }
+                                return const SizedBox.shrink();
+                              },
+                            ),
+                            
+                            // Cover Letter Section
+                            if (appData['cover_letter'] != null && 
+                                appData['cover_letter'].toString().isNotEmpty)
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'Cover Letter',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
                                     ),
                                   ),
-                                  const SizedBox(width: 8),
-                                  ElevatedButton(
-                                    onPressed: () {
-                                      showDialog(
-                                        context: context,
-                                        builder: (BuildContext context) {
-                                          return AlertDialog(
-                                            title: const Text('Update Status'),
-                                            content: Text(
-                                              'Update status to ${appData['status'].toString().toUpperCase()}?'
-                                            ),
-                                            actions: [
-                                              TextButton(
-                                                child: const Text('Cancel'),
-                                                onPressed: () {
-                                                  Navigator.of(context).pop();
-                                                },
-                                              ),
-                                              TextButton(
-                                                child: const Text('Update'),
-                                                onPressed: () {
-                                                  Navigator.of(context).pop();
-                                                  _updateApplicationStatus(
-                                                    application['id'],
-                                                    appData['status'],
-                                                  );
-                                                },
-                                              ),
-                                            ],
-                                          );
-                                        },
-                                      );
-                                    },
-                                    child: const Text('Update'),
+                                  const SizedBox(height: 8),
+                                  Container(
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey[100],
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Text(
+                                      appData['cover_letter'],
+                                      maxLines: 5,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
                                   ),
                                 ],
                               ),
-                              
-                              const SizedBox(height: 16),
-                              
-                              // Document Actions
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                                children: [
-                                  if (appData['resume_url'] != null)
-                                    ElevatedButton.icon(
-                                      icon: const Icon(Icons.description),
-                                      label: const Text('View Resume'),
-                                      onPressed: () async {
-                                        final resumeUrl = appData['resume_url'];
-                                        if (resumeUrl != null && resumeUrl.toString().isNotEmpty) {
-                                          // Check if it's a valid URL
-                                          try {
-                                            final uri = Uri.parse(resumeUrl);
-                                            if (uri.hasScheme) {
-                                              await _launchUrl(resumeUrl);
-                                            } else {
-                                              ScaffoldMessenger.of(context).showSnackBar(
-                                                const SnackBar(
-                                                  content: Text('Invalid resume URL'),
-                                                  backgroundColor: Colors.red,
-                                                ),
-                                              );
-                                            }
-                                          } catch (e) {
+                            
+                            const SizedBox(height: 16),
+                            
+                            // Status Update Section
+                            const Text(
+                              'Application Status',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: DropdownButtonFormField<String>(
+                                    value: appData['status'] ?? 'pending',
+                                    decoration: InputDecoration(
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                    ),
+                                    items: [
+                                      'pending',
+                                      'reviewing',
+                                      'shortlisted',
+                                      'declined',
+                                    ].map((String value) {
+                                      return DropdownMenuItem<String>(
+                                        value: value,
+                                        child: Text(value.toUpperCase()),
+                                      );
+                                    }).toList(),
+                                    onChanged: (newValue) {
+                                      if (newValue != null) {
+                                        setState(() {
+                                          appData['status'] = newValue;
+                                        });
+                                      }
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                ElevatedButton(
+                                  onPressed: () {
+                                    showDialog(
+                                      context: context,
+                                      builder: (BuildContext context) {
+                                        return AlertDialog(
+                                          title: const Text('Update Status'),
+                                          content: Text(
+                                            'Update status to ${appData['status'].toString().toUpperCase()}?'
+                                          ),
+                                          actions: [
+                                            TextButton(
+                                              child: const Text('Cancel'),
+                                              onPressed: () {
+                                                Navigator.of(context).pop();
+                                              },
+                                            ),
+                                            TextButton(
+                                              child: const Text('Update'),
+                                              onPressed: () {
+                                                Navigator.of(context).pop();
+                                                _updateApplicationStatus(
+                                                  application['id'],
+                                                  appData['status'],
+                                                );
+                                              },
+                                            ),
+                                          ],
+                                        );
+                                      },
+                                    );
+                                  },
+                                  child: const Text('Update'),
+                                ),
+                              ],
+                            ),
+                            
+                            const SizedBox(height: 16),
+                            
+                            // Document Actions
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                if (appData['resume_url'] != null)
+                                  ElevatedButton.icon(
+                                    icon: const Icon(Icons.description),
+                                    label: const Text('View Resume'),
+                                    onPressed: () async {
+                                      final resumeUrl = appData['resume_url'];
+                                      if (resumeUrl != null && resumeUrl.toString().isNotEmpty) {
+                                        // Check if it's a valid URL
+                                        try {
+                                          final uri = Uri.parse(resumeUrl);
+                                          if (uri.hasScheme) {
+                                            await _launchUrl(resumeUrl);
+                                          } else {
                                             ScaffoldMessenger.of(context).showSnackBar(
-                                              SnackBar(
-                                                content: Text('Error with resume URL: ${e.toString()}'),
+                                              const SnackBar(
+                                                content: Text('Invalid resume URL'),
                                                 backgroundColor: Colors.red,
                                               ),
                                             );
                                           }
-                                        } else {
+                                        } catch (e) {
                                           ScaffoldMessenger.of(context).showSnackBar(
-                                            const SnackBar(
-                                              content: Text('No resume URL available'),
-                                              backgroundColor: Colors.orange,
+                                            SnackBar(
+                                              content: Text('Error with resume URL: ${e.toString()}'),
+                                              backgroundColor: Colors.red,
                                             ),
                                           );
                                         }
-                                      },
-                                    )
-                                  else
-                                    ElevatedButton.icon(
-                                      icon: const Icon(Icons.description),
-                                      label: const Text('No Resume'),
-                                      onPressed: null,
-                                    ),
-                                  ElevatedButton.icon(
-                                    icon: const Icon(Icons.mail),
-                                    label: const Text('Contact'),
-                                    onPressed: () {
-                                      final email = jobSeekerData['email'];
-                                      if (email != null) {
-                                        _launchUrl('mailto:$email');
+                                      } else {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(
+                                            content: Text('No resume URL available'),
+                                            backgroundColor: Colors.orange,
+                                          ),
+                                        );
                                       }
                                     },
+                                  )
+                                else
+                                  ElevatedButton.icon(
+                                    icon: const Icon(Icons.description),
+                                    label: const Text('No Resume'),
+                                    onPressed: null,
                                   ),
-                                ],
-                              ),
-                            ],
-                          ),
+                                ElevatedButton.icon(
+                                  icon: const Icon(Icons.mail),
+                                  label: const Text('Contact'),
+                                  onPressed: () {
+                                    final email = jobSeekerData['email'];
+                                    if (email != null) {
+                                      _launchUrl('mailto:$email');
+                                    }
+                                  },
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                  );
-                },
-              ),
+                      ),
+                    ],
+                  ),
+                );
+              },
             ),
-          BottomNavigationBar(
-            backgroundColor: Theme.of(context).primaryColor,
-            // Make sure items are visible
-            selectedItemColor: Colors.black,
-            unselectedItemColor: Colors.black54,
-            // Ensure labels are shown
-            showSelectedLabels: true,
-            showUnselectedLabels: true,
-            // Increase the visibility
-            elevation: 8,
-            type: BottomNavigationBarType.fixed,
-            items: const [
-              BottomNavigationBarItem(
-                icon: Icon(Icons.work),
-                label: 'Manage Jobs',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.chat),
-                label: 'Chatbot',
-              ),
-              BottomNavigationBarItem(
-                icon: Icon(Icons.update),
-                label: 'Update Application',
-              ),
-              BottomNavigationBarItem(
+          ),
+        BottomNavigationBar(
+          backgroundColor: Theme.of(context).primaryColor,
+          selectedItemColor: Colors.black,
+          unselectedItemColor: Colors.black54,
+          showSelectedLabels: true,
+          showUnselectedLabels: true,
+          elevation: 8,
+          type: BottomNavigationBarType.fixed,
+          items: const [
+            BottomNavigationBarItem(
+              icon: Icon(Icons.work),
+              label: 'Manage Jobs',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.chat),
+              label: 'Chatbot',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.update),
+              label: 'Update Application',
+            ),
+            BottomNavigationBarItem(
               icon: Icon(Icons.people),
               label: 'Candidates',
             ),
-            ],
-            currentIndex: _currentIndex,
-            onTap: (index) {
-              setState(() {
-                _currentIndex = index;
-              });
-              
-              switch (index) {
-                case 0:
-                  Navigator.pushAndRemoveUntil(
-                    context,
-                    MaterialPageRoute(builder: (context) => ManageJobsPage()),
-                    (route) => false,
-                  );
-                  break;
-                case 1:
-                  Navigator.pushAndRemoveUntil(
-                    context,
-                    MaterialPageRoute(builder: (context) => EmployerChatPage()),
-                    (route) => false,
-                  );
-                  break;
-                case 2:
-                  // Already on UpdateStatus page
-                  break;
-
-                case 3:
+          ],
+          currentIndex: _currentIndex,
+          onTap: (index) {
+            setState(() {
+              _currentIndex = index;
+            });
+            
+            switch (index) {
+              case 0:
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(builder: (context) => ManageJobsPage()),
+                  (route) => false,
+                );
+                break;
+              case 1:
+                Navigator.pushAndRemoveUntil(
+                  context,
+                  MaterialPageRoute(builder: (context) => EmployerChatPage()),
+                  (route) => false,
+                );
+                break;
+              case 2:
+                // Already on UpdateStatus page
+                break;
+              case 3:
                 Navigator.pushAndRemoveUntil(
                   context,
                   MaterialPageRoute(builder: (context) => const CandidateSearchPage()),
                   (route) => false,
                 );
-              }
-            },
-          ),
-        ],
-      ),
-    );
-  }
+            }
+          },
+        ),
+      ],
+    ),
+  );
+}
 
   Widget _buildDetailRow(IconData icon, String text) {
     return Padding(

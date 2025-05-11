@@ -1,4 +1,7 @@
 // lib/models/job_application.dart
+import 'package:intl/intl.dart';
+import 'package:prototype_2/models/interview_slot.dart'; // Import the single InterviewSlot model
+
 class JobApplication {
   final String id;
   final String jobId;
@@ -13,6 +16,11 @@ class JobApplication {
   final String? coverLetter;
   final String? resumeUrl;
 
+  // Interview related fields
+  final List<InterviewSlot>? interviewSlots; // Slots provided by employer
+  final String? bookedInterviewId; // Slot selected by job seeker
+  
+
   JobApplication({
     required this.id,
     required this.jobId,
@@ -26,10 +34,20 @@ class JobApplication {
     this.lastUpdateDate,
     this.coverLetter,
     this.resumeUrl,
+    this.interviewSlots,  
+    this.bookedInterviewId,  
   });
 
   // Create from Firestore data
   factory JobApplication.fromMap(Map<String, dynamic> data, String id) {
+    // Parse interview slots if they exist
+    List<InterviewSlot>? slots;
+    if (data['interview_slots'] != null) {
+      slots = (data['interview_slots'] as List)
+          .map((slotData) => InterviewSlot.fromMap(slotData))
+          .toList();
+    }
+
     return JobApplication(
       id: id,
       jobId: data['job_id'] ?? '',
@@ -51,6 +69,8 @@ class JobApplication {
           : null,
       coverLetter: data['cover_letter'],
       resumeUrl: data['resume_url'],
+      interviewSlots: slots,  // Add this
+      bookedInterviewId: data['booked_interview_id'],  // Add this
     );
   }
 
@@ -68,6 +88,8 @@ class JobApplication {
       'last_update_date': lastUpdateDate?.toIso8601String(),
       'cover_letter': coverLetter,
       'resume_url': resumeUrl,
+      'interview_slots': interviewSlots?.map((slot) => slot.toMap()).toList(),  // Add this
+      'booked_interview_id': bookedInterviewId,  // Add this
     };
   }
 }

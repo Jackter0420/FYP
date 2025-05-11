@@ -1,5 +1,8 @@
 // lib/widgets/employer_app_bar.dart
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:prototype_2/screens/update_status_page.dart';
 import 'package:provider/provider.dart';
 import 'package:prototype_2/providers/user_provider.dart';
 import 'package:prototype_2/screens/profile_edit_page.dart';
@@ -25,7 +28,52 @@ class EmployerAppBar extends StatelessWidget implements PreferredSizeWidget {
       actions: [
         // Additional actions specific to the page
         if (additionalActions != null) ...additionalActions!,
-        
+        FutureBuilder<int>(
+        future: _checkUnconfirmedInterviews(),
+        builder: (context, snapshot) {
+          final count = snapshot.data ?? 0;
+          return Stack(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.mail),
+                tooltip: 'Notifications',
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => UpdateStatusPage(),
+                    ),
+                  );
+                },
+              ),
+              if (count > 0)
+                Positioned(
+                  right: 8,
+                  top: 8,
+                  child: Container(
+                    padding: EdgeInsets.all(2),
+                    decoration: BoxDecoration(
+                      color: Colors.red,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    constraints: BoxConstraints(
+                      minWidth: 16,
+                      minHeight: 16,
+                    ),
+                    child: Text(
+                      count.toString(),
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
         // Profile button
         IconButton(
           icon: const Icon(Icons.account_circle),
@@ -187,7 +235,26 @@ class EmployerAppBar extends StatelessWidget implements PreferredSizeWidget {
       },
     );
   }
-  
+Future<int> _checkUnconfirmedInterviews() async {
+  try {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null) return 0;
+    
+    // Query applications with selected_interview_date but not confirmed
+    final querySnapshot = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(currentUser.uid)
+        .collection('applications')
+        .where('selected_interview_date', isNull: false)
+        .where('is_interview_date_confirmed', isEqualTo: false)
+        .get();
+    
+    return querySnapshot.docs.length;
+  } catch (e) {
+    print('Error checking unconfirmed interviews: $e');
+    return 0;
+  }
+}
   @override
   Size get preferredSize => const Size.fromHeight(kToolbarHeight);
 }

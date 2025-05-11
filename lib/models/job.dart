@@ -1,4 +1,5 @@
-// lib/models/job.dart
+// In lib/models/job.dart, add the field for interview dates
+
 class Job {
   final String id;
   final String jobTitle;
@@ -9,6 +10,7 @@ class Job {
   final String employerId;
   final String status;
   final DateTime postDate;
+  final List<DateTime>? interviewDates; // New field for available interview dates
 
   Job({
     required this.id,
@@ -20,10 +22,19 @@ class Job {
     required this.employerId,
     required this.status,
     required this.postDate,
+    this.interviewDates,
   });
 
   // Create from Firestore data
   factory Job.fromMap(Map<String, dynamic> data, String id) {
+    // Parse interview dates if they exist
+    List<DateTime>? dates;
+    if (data['interview_dates'] != null) {
+      dates = (data['interview_dates'] as List)
+          .map((dateStr) => DateTime.parse(dateStr.toString()))
+          .toList();
+    }
+    
     return Job(
       id: id,
       jobTitle: data['job_title'] ?? 'No Title',
@@ -38,6 +49,7 @@ class Job {
               ? data['post_date'] 
               : DateTime.parse(data['post_date']))
           : DateTime.now(),
+      interviewDates: dates,
     );
   }
 
@@ -52,6 +64,7 @@ class Job {
       'employer_id': employerId,
       'status': status,
       'post_date': postDate.toIso8601String(),
+      'interview_dates': interviewDates?.map((date) => date.toIso8601String()).toList(),
     };
   }
 }

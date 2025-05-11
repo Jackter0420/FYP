@@ -1,4 +1,3 @@
-// Enhanced Track_application_page.dart for job seekers
 import 'package:flutter/material.dart';
 import 'package:prototype_2/screens/job_recommendations_page.dart';
 import 'package:prototype_2/screens/jobseeker_chat_page.dart';
@@ -142,9 +141,9 @@ Future<void> _withdrawApplication(String applicationId) async {
   // Get color based on status
 Color _getStatusColor(String status) {
   switch (status.toLowerCase()) {
-    case 'approved':
+    case 'shortlisted':
       return Colors.green;
-    case 'rejected':
+    case 'declined':
       return Colors.red;
     case 'reviewing':
       return Colors.blue;
@@ -157,9 +156,9 @@ Color _getStatusColor(String status) {
   // Get icon based on status
  IconData _getStatusIcon(String status) {
   switch (status.toLowerCase()) {
-    case 'approved':
+    case 'shortlisted':
       return Icons.check_circle;
-    case 'rejected':
+    case 'declined':
       return Icons.cancel;
     case 'reviewing':
       return Icons.visibility;
@@ -177,7 +176,7 @@ Color _getStatusColor(String status) {
 
   // Build filter chips
  Widget _buildFilterChips() {
-  final filters = ['all', 'pending', 'reviewing', 'approved', 'rejected'];
+  final filters = ['all', 'pending', 'reviewing', 'shortlisted', 'declined'];
   
   return SingleChildScrollView(
     scrollDirection: Axis.horizontal,
@@ -234,8 +233,8 @@ Widget _buildCompactStatItem(String label, int count, Color color) {
   final totalApplications = _applications.length;
   final pendingCount = _applications.where((app) => app.status.toLowerCase() == 'pending').length;
   final reviewingCount = _applications.where((app) => app.status.toLowerCase() == 'reviewing').length;
-  final approvedCount = _applications.where((app) => app.status.toLowerCase() == 'approved').length;
-  final rejectedCount = _applications.where((app) => app.status.toLowerCase() == 'rejected').length;
+  final approvedCount = _applications.where((app) => app.status.toLowerCase() == 'shortlisted').length;
+  final rejectedCount = _applications.where((app) => app.status.toLowerCase() == 'declined').length;
   
   return Card(
     margin: const EdgeInsets.all(8.0),
@@ -259,8 +258,8 @@ Widget _buildCompactStatItem(String label, int count, Color color) {
               _buildCompactStatItem('Total', totalApplications, Colors.blue),
               _buildCompactStatItem('Pending', pendingCount, Colors.amber),
               _buildCompactStatItem('Reviewing', reviewingCount, Colors.blue),
-              _buildCompactStatItem('Approved', approvedCount, Colors.green),
-              _buildCompactStatItem('Rejected', rejectedCount, Colors.red),
+              _buildCompactStatItem('Shortlisted', approvedCount, Colors.green),
+              _buildCompactStatItem('Declined', rejectedCount, Colors.red),
             ],
           ),
         ],
