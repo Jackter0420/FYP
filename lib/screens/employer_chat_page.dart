@@ -43,9 +43,7 @@ class _EmployerChatPageState extends State<EmployerChatPage> {
   
   // Rasa server URL - update this to your Rasa server address
   final String _rasaEndpoint = 'http://10.0.2.2:5005/webhooks/rest/webhook'; // Use this for Android emulator
-  // final String _rasaEndpoint = 'http://localhost:5005/webhooks/rest/webhook'; // Use this for iOS simulator
-  // final String _rasaEndpoint = 'https://your-rasa-server.com/webhooks/rest/webhook'; // Production URL
-
+  
   // Define the conversation messages
   final List<ChatMessage> messages = [];
 

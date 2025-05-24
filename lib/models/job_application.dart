@@ -1,6 +1,7 @@
-// lib/models/job_application.dart
+// Complete job_application.dart model
+
 import 'package:intl/intl.dart';
-import 'package:prototype_2/models/interview_slot.dart'; // Import the single InterviewSlot model
+import 'package:prototype_2/models/interview_slot.dart';
 
 class JobApplication {
   final String id;
@@ -19,7 +20,7 @@ class JobApplication {
   // Interview related fields
   final List<InterviewSlot>? interviewSlots; // Slots provided by employer
   final String? bookedInterviewId; // Slot selected by job seeker
-  
+  final String? interviewStatus; // Status of the interview (scheduled, completed, etc.)
 
   JobApplication({
     required this.id,
@@ -34,8 +35,9 @@ class JobApplication {
     this.lastUpdateDate,
     this.coverLetter,
     this.resumeUrl,
-    this.interviewSlots,  
-    this.bookedInterviewId,  
+    this.interviewSlots,
+    this.bookedInterviewId,
+    this.interviewStatus,
   });
 
   // Create from Firestore data
@@ -55,7 +57,7 @@ class JobApplication {
       companyName: data['company_name'] ?? 'Unknown Company',
       jobSeekerId: data['job_seeker_id'] ?? '',
       jobSeekerName: data['job_seeker_name'] ?? 'Anonymous',
-      jobSeekerPhone: data['job_seeker_phone'],
+      jobSeekerPhone: data['job_seeker_phone'] ?? data['jobSeekerPhone'], // Support both field names
       status: data['status'] ?? 'pending',
       appliedDate: data['applied_date'] != null 
           ? (data['applied_date'] is DateTime 
@@ -69,8 +71,9 @@ class JobApplication {
           : null,
       coverLetter: data['cover_letter'],
       resumeUrl: data['resume_url'],
-      interviewSlots: slots,  // Add this
-      bookedInterviewId: data['booked_interview_id'],  // Add this
+      interviewSlots: slots,
+      bookedInterviewId: data['booked_interview_id'],
+      interviewStatus: data['interview_status'],
     );
   }
 
@@ -88,8 +91,9 @@ class JobApplication {
       'last_update_date': lastUpdateDate?.toIso8601String(),
       'cover_letter': coverLetter,
       'resume_url': resumeUrl,
-      'interview_slots': interviewSlots?.map((slot) => slot.toMap()).toList(),  // Add this
-      'booked_interview_id': bookedInterviewId,  // Add this
+      'interview_slots': interviewSlots?.map((slot) => slot.toMap()).toList(),
+      'booked_interview_id': bookedInterviewId,
+      'interview_status': interviewStatus,
     };
   }
 }

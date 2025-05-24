@@ -1,4 +1,5 @@
-// lib/models/interview_slot.dart
+// Complete interview_slot.dart model
+
 import 'package:intl/intl.dart';
 
 class InterviewSlot {

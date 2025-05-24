@@ -586,21 +586,26 @@ Future<void> _loadAppliedJobs() async {
   
   // Show apply dialog with cover letter input and resume upload
 void _showApplyDialog(String jobId, String jobTitle, String companyName) {
-  final coverLetterController = TextEditingController();
+  final TextEditingController coverLetterController = TextEditingController();
   File? selectedResume;
   String? resumeFileName;
   String? selectedSlotId;
   
   showDialog(
     context: context,
-    builder: (BuildContext context) {
+    builder: (context) {
       return StatefulBuilder(
         builder: (context, setState) {
           return AlertDialog(
-            title: Text('Apply for $jobTitle'),
-            content: SingleChildScrollView(
+            title: Text('Apply for $jobTitle',
+              style: TextStyle(
+                fontSize: 18, // Smaller font size (was likely 24 or 20)
+                fontWeight: FontWeight.bold,
+                ),
+              ),
+            content: SingleChildScrollView( // Use SingleChildScrollView instead of direct ListView
               child: Column(
-                mainAxisSize: MainAxisSize.min,
+                mainAxisSize: MainAxisSize.min, // Important: this makes the column wrap its content
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('Company: $companyName'),
@@ -609,7 +614,7 @@ void _showApplyDialog(String jobId, String jobTitle, String companyName) {
                   // Cover Letter Input
                   TextField(
                     controller: coverLetterController,
-                    maxLines: 5,
+                    maxLines: 3,
                     decoration: const InputDecoration(
                       labelText: 'Cover Letter',
                       hintText: 'Write a brief cover letter...',
@@ -617,150 +622,10 @@ void _showApplyDialog(String jobId, String jobTitle, String companyName) {
                     ),
                   ),
                   
-                  const SizedBox(height: 16),
-                  
-                  // Interview Slots Section
-                  FutureBuilder<DocumentSnapshot>(
-                    future: FirebaseFirestore.instance
-                        .collection('jobs')
-                        .doc(jobId)
-                        .get(),
-                    builder: (context, snapshot) {
-                      if (!snapshot.hasData) return const SizedBox.shrink();
-                      
-                      final jobData = snapshot.data!.data() as Map<String, dynamic>?;
-                      
-                      if (jobData == null) return const SizedBox.shrink();
-                      
-                      // Check if job has deadline and if it's passed
-                      final deadline = jobData['deadline'] as String?;
-                      bool isExpired = false;
-                      DateTime? deadlineDate;
-                      
-                      if (deadline != null && deadline.isNotEmpty) {
-                        try {
-                          deadlineDate = DateTime.parse(deadline);
-                          isExpired = DateTime.now().isAfter(deadlineDate);
-                        } catch (e) {
-                          print("Error parsing deadline: $e");
-                        }
-                      }
-                      
-                      // Check if job has interview slots and is not expired
-                      if (jobData['has_interview_slots'] == true && 
-                          jobData['interview_slots'] != null && 
-                          !isExpired) {
-                        
-                        final slots = jobData['interview_slots'] as List;
-                        final availableSlots = slots.where((slotData) {
-                          final slot = InterviewSlot.fromMap(slotData);
-                          // Filter out booked slots and slots beyond deadline
-                          if (slot.isBooked) return false;
-                          
-                          if (deadlineDate != null) {
-                            return slot.startTime.isBefore(deadlineDate);
-                          }
-                          return true;
-                        }).toList();
-                        
-                        if (availableSlots.isEmpty) {
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 8.0),
-                            child: Text(
-                              'No interview slots available',
-                              style: TextStyle(color: Colors.red),
-                            ),
-                          );
-                        }
-                        
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Select Interview Time:',
-                              style: TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 16,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Container(
-                              height: 150,
-                              decoration: BoxDecoration(
-                                border: Border.all(color: Colors.grey.shade300),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: ListView.builder(
-                                padding: const EdgeInsets.all(8),
-                                itemCount: availableSlots.length,
-                                itemBuilder: (context, index) {
-                                  final slotData = availableSlots[index];
-                                  final slot = InterviewSlot.fromMap(slotData);
-                                  
-                                  return RadioListTile<String>(
-                                    title: Text(
-                                      DateFormat('MMM d, yyyy').format(slot.startTime),
-                                      style: const TextStyle(fontWeight: FontWeight.bold),
-                                    ),
-                                    subtitle: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          '${DateFormat('h:mm a').format(slot.startTime)} - ${DateFormat('h:mm a').format(slot.endTime)}',
-                                        ),
-                                        if (slot.meetingLink != null)
-                                          Text(
-                                            'Online Interview',
-                                            style: TextStyle(
-                                              color: Colors.blue,
-                                              fontSize: 12,
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                    value: slot.id,
-                                    groupValue: selectedSlotId,
-                                    onChanged: (value) {
-                                      setState(() {
-                                        selectedSlotId = value;
-                                      });
-                                    },
-                                  );
-                                },
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                          ],
-                        );
-                      } else if (isExpired) {
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 8.0),
-                          child: Card(
-                            color: Colors.red.shade50,
-                            child: Padding(
-                              padding: const EdgeInsets.all(12),
-                              child: Row(
-                                children: [
-                                  Icon(Icons.warning, color: Colors.red),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      'This job deadline has passed. Interview slots are no longer available.',
-                                      style: TextStyle(color: Colors.red.shade800),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        );
-                      }
-                      
-                      return const SizedBox.shrink();
-                    },
-                  ),
+                
                   
                   // Resume Upload Section
+                  const SizedBox(height: 16),
                   const Text(
                     'Resume (Optional)',
                     style: TextStyle(
@@ -846,7 +711,6 @@ void _showApplyDialog(String jobId, String jobTitle, String companyName) {
                     coverLetterController.text,
                     selectedResume,
                     resumeFileName,
-                    selectedSlotId,
                   );
                 },
               ),
@@ -857,7 +721,6 @@ void _showApplyDialog(String jobId, String jobTitle, String companyName) {
     },
   );
 }
-  
   // Submit job application with resume upload
 // Enhanced resume upload method with better error handling
 
@@ -866,14 +729,12 @@ Future<void> _submitApplication(
     String coverLetter, 
     File? resume, 
     String? resumeFileName,
-    String? selectedSlotId, // Make sure this parameter is added
 ) async {
   try {
     print('=== STARTING APPLICATION SUBMISSION ===');
     print('Job ID: $jobId');
     print('Has Resume File: ${resume != null}');
     print('Resume Filename: $resumeFileName');
-    print('Selected Slot ID: $selectedSlotId'); // Add this debug line
     
     showDialog(
       context: context,
@@ -1005,14 +866,12 @@ Future<void> _submitApplication(
     // Submit application even if resume upload failed
     print('=== SUBMITTING APPLICATION DATA ===');
     print('Resume URL: ${resumeUrl ?? "none"}');
-    print('Selected Slot ID: ${selectedSlotId ?? "none"}');
     
-    // KEY CHANGE: Use submitApplicationWithInterview instead of submitApplication
-    final result = await JobApplicationService.submitApplicationWithInterview(
+    // KEY CHANGE: Use submitApplication instead of submitApplication
+    final result = await JobApplicationService.submitApplication(
       jobId: jobId,
       coverLetter: coverLetter,
-      resumeUrl: resumeUrl,
-      selectedSlotId: selectedSlotId, // Pass the selected slot ID
+      resumeUrl: resumeUrl,// Pass the selected slot ID
     );
     
     print('Application submission result: $result');
@@ -1033,16 +892,11 @@ Future<void> _submitApplication(
       if (mounted) {
         String message = 'Application submitted successfully!';
         
-        // Check if resume and interview slot messages should be added
+        // Check if resume messages should be added
         if (resumeUrl != null) {
           message = 'Application submitted with resume!';
         }
         
-        if (selectedSlotId != null) {
-          message = resumeUrl != null 
-            ? 'Application submitted with resume and interview scheduled!' 
-            : 'Application submitted with interview scheduled!';
-        }
         
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

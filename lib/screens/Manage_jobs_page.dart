@@ -1,4 +1,10 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:google_generative_ai/google_generative_ai.dart';
+import 'package:http/http.dart' as http;
 import 'package:prototype_2/models/interview_slot.dart';
 import 'package:prototype_2/models/job_application.dart';
 import 'package:prototype_2/screens/candidate_search_page.dart';
@@ -12,6 +18,8 @@ import 'package:prototype_2/providers/user_provider.dart';
 import 'package:intl/intl.dart'; // Import for date formatting
 import 'package:prototype_2/widgets/interview_slot_selector.dart';
 import 'package:prototype_2/models/interview_slot.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:prototype_2/widgets/expandable_description_text.dart';
 
 
 class ManageJobsPage extends StatefulWidget {
@@ -23,11 +31,18 @@ class _ManageJobsPageState extends State<ManageJobsPage> {
   int _currentIndex = 0;
   bool _isLoading = true;
   List<Map<String, dynamic>> jobs = [];
+  DateTime? _lastGenerationTime; // Add this field
+  int _generationCount = 0; // Keep track of the number of generations in the session
+  static const int _maxGenerationsPerSession = 10; // Limit generations per session
   
   @override
   void initState() {
     super.initState();
     _fetchJobs();
+    listAvailableModels();
+
+    _lastGenerationTime = null;
+    _generationCount = 0;
   }
 
   // Helper function to format timestamp into readable format
@@ -377,12 +392,29 @@ class _ManageJobsPageState extends State<ManageJobsPage> {
                                     ),
                                   ),
                                   // Edit/Delete popup menu
+                                  
                                   PopupMenuButton(
                                     itemBuilder: (context) => [
                                       PopupMenuItem(
                                         child: Row(
                                           children: const [
                                             Icon(Icons.edit, color: Colors.blue),
+                                            SizedBox(width: 8),
+                                            Text('Edit Job'),
+                                          ],
+                                        ),
+                                        onTap: () {
+                                          // Add navigation to edit job
+                                          Future.delayed(
+                                            const Duration(seconds: 0),
+                                            () => _showEditJobDialog(job),
+                                          );
+                                        },
+                                      ),
+                                      PopupMenuItem(
+                                        child: Row(
+                                          children: const [
+                                            Icon(Icons.description, color: Colors.blue),
                                             SizedBox(width: 8),
                                             Text('Edit Description'),
                                           ],
@@ -577,18 +609,10 @@ class _ManageJobsPageState extends State<ManageJobsPage> {
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 8),
-                              if (job['description'].isNotEmpty) 
-                                Text(
-                                  job['description'],
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                )
-                              else
-                                Text(
-                                  "No description added. Click 'Edit Description' to add one.",
-                                  style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey),
-                                ),
+                            const SizedBox(height: 8),
+                            ExpandableDescriptionText(
+                              text: job['description'] ?? '',
+                            ),
                             ],
                           ),
                         ),
@@ -662,63 +686,516 @@ class _ManageJobsPageState extends State<ManageJobsPage> {
   }
 
 
-  void _showEditDescriptionDialog(Map<String, dynamic> job) {
-    final TextEditingController descriptionController = TextEditingController();
-    descriptionController.text = job['description'] ?? '';
-    
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text('Edit Job Description'),
-          content: TextField(
-            controller: descriptionController,
-            decoration: InputDecoration(
-              hintText: 'Enter job description',
-              border: OutlineInputBorder(),
-            ),
-            maxLines: 8,
+void _showEditJobDialog(Map<String, dynamic> job) {
+  final TextEditingController titleController = TextEditingController(text: job['title']);
+  final TextEditingController locationController = TextEditingController(text: job['location']);
+  final TextEditingController skillsController = TextEditingController(text: job['skills']);
+  
+  showDialog(
+    context: context,
+    builder: (BuildContext context) {
+      return AlertDialog(
+        title: Text('Edit Job Details'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: titleController,
+                decoration: InputDecoration(
+                  labelText: 'Job Title',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              SizedBox(height: 16),
+              TextField(
+                controller: locationController,
+                decoration: InputDecoration(
+                  labelText: 'Job Location',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              SizedBox(height: 16),
+              TextField(
+                controller: skillsController,
+                decoration: InputDecoration(
+                  labelText: 'Required Skills (comma-separated)',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 3,
+              ),
+            ],
           ),
-          actions: [
-            TextButton(
-              child: Text('Cancel'),
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-            ),
-            TextButton(
-              child: Text('Save'),
-              onPressed: () async {
-                try {
-                  final currentUser = FirebaseAuth.instance.currentUser;
-                  if (currentUser != null) {
-                    // Update in main jobs collection
-                    await FirebaseFirestore.instance
-                        .collection('jobs')
-                        .doc(job['id'])
-                        .update({'job_description': descriptionController.text});
-                    
-                    // Update in user's jobs subcollection
-                    await FirebaseFirestore.instance
-                        .collection('users')
-                        .doc(currentUser.uid)
-                        .collection('jobs')
-                        .doc(job['id'])
-                        .update({'job_description': descriptionController.text});
-                    
-                    _fetchJobs(); // Refresh jobs list
-                  }
-                } catch (e) {
-                  print("Error updating job description: $e");
+        ),
+        actions: [
+          TextButton(
+            child: Text('Cancel'),
+            onPressed: () {
+              Navigator.of(context).pop();
+            },
+          ),
+          TextButton(
+            child: Text('Save'),
+            onPressed: () async {
+              try {
+                final currentUser = FirebaseAuth.instance.currentUser;
+                if (currentUser != null) {
+                  // Parse skills into a list
+                  List<String> skillsList = skillsController.text
+                      .split(',')
+                      .map((skill) => skill.trim())
+                      .where((skill) => skill.isNotEmpty)
+                      .toList();
+                  
+                  // Update data map
+                  Map<String, dynamic> updateData = {
+                    'job_title': titleController.text.trim(),
+                    'job_location': locationController.text.trim(),
+                    'job_skills': skillsList,
+                    'job_skills_text': skillsController.text.trim(),
+                    'last_updated': DateTime.now().toIso8601String(),
+                  };
+                  
+                  // Update in main jobs collection
+                  await FirebaseFirestore.instance
+                      .collection('jobs')
+                      .doc(job['id'])
+                      .update(updateData);
+                  
+                  // Update in user's jobs subcollection
+                  await FirebaseFirestore.instance
+                      .collection('users')
+                      .doc(currentUser.uid)
+                      .collection('jobs')
+                      .doc(job['id'])
+                      .update(updateData);
+                  
+                  _fetchJobs(); // Refresh jobs list
                 }
                 Navigator.of(context).pop();
-              },
+                
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Job updated successfully'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              } catch (e) {
+                print("Error updating job: $e");
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Error updating job: $e'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+                Navigator.of(context).pop();
+              }
+            },
+          ),
+        ],
+      );
+    },
+  );
+}
+
+Future<void> _saveGeneratedDescription(String jobId, String description) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('last_job_description_$jobId', description);
+    print('Saved generated description for job $jobId');
+  } catch (e) {
+    print('Error saving generated description: $e');
+  }
+}
+
+// Method to load a previously generated description
+Future<String?> _loadGeneratedDescription(String jobId) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('last_job_description_$jobId');
+  } catch (e) {
+    print('Error loading generated description: $e');
+    return null;
+  }
+}
+
+Future<void> listAvailableModels() async {
+  try {
+    final apiKey = 'your_actual_api_key'; // Replace with your API key
+    
+    // Use the REST API to list available models
+    final url = Uri.parse('https://generativelanguage.googleapis.com/v1/models?key=$apiKey');
+    
+    print('Requesting available models from Gemini API...');
+    final response = await http.get(url);
+    
+    if (response.statusCode == 200) {
+      final data = json.decode(response.body);
+      final models = data['models'] as List<dynamic>;
+      
+      print('--- Available models ---');
+      if (models.isEmpty) {
+        print('No models available for this API key');
+      } else {
+        for (var model in models) {
+          print('Model: ${model['name']}');
+          print('  Display name: ${model['displayName']}');
+          print('  Description: ${model['description']}');
+          print('  Supported generation methods: ${model['supportedGenerationMethods']}');
+          print('---');
+        }
+      }
+      
+      // Find models that support content generation
+      final textModels = models.where((model) => 
+        (model['supportedGenerationMethods'] as List<dynamic>).contains('generateContent')).toList();
+      
+      print('\n--- Models that support text generation ---');
+      if (textModels.isEmpty) {
+        print('No models support text generation with this API key');
+      } else {
+        for (var model in textModels) {
+          print('- ${model['name']}');
+        }
+      }
+    } else {
+      print('Failed to list models. Status code: ${response.statusCode}');
+      print('Response: ${response.body}');
+    }
+  } catch (e) {
+    print('Error listing models: $e');
+    print('Error details: ${e.toString()}');
+  }
+}
+
+
+Future<void> _generateJobDescription(
+  StateSetter setState, 
+  Map<String, dynamic> job, 
+  TextEditingController controller,
+  Function(bool) setGeneratingCallback // Add this callback parameter
+) async {
+  // Rate limiting check - don't allow too frequent requests
+  final now = DateTime.now();
+  if (_lastGenerationTime != null && 
+      now.difference(_lastGenerationTime!).inSeconds < 10) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Please wait at least 10 seconds between generation requests'),
+        backgroundColor: Colors.orange,
+      ),
+    );
+    return;
+  }
+  
+  // Usage limit check - prevent excessive usage
+  if (_generationCount >= _maxGenerationsPerSession) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('You\'ve reached the maximum number of generations for this session. Please reopen the app to reset.'),
+        backgroundColor: Colors.red,
+      ),
+    );
+    return;
+  }
+  
+  // Update tracking variables
+  _lastGenerationTime = now;
+  _generationCount++;
+  
+  // Use the callback to update the loading state
+  setGeneratingCallback(true);
+  
+  try {
+    // Get job details to pass to Gemini
+    final companyName = job['company'] ?? 'Unknown Company';
+    final jobTitle = job['title'] ?? 'Unknown Position';
+    final jobLocation = job['location'] ?? 'Unknown Location';
+    
+    // Extract skills
+    List<String> skills = [];
+    if (job['skills_list'] != null && job['skills_list'] is List) {
+      skills = List<String>.from(job['skills_list']);
+    } else if (job['skills'] != null && job['skills'].toString().isNotEmpty) {
+      skills = job['skills'].toString().split(',').map((s) => s.trim()).toList();
+    }
+    
+    // Construct prompt for Gemini
+    final prompt = '''
+    Generate a professional and detailed job description for the following position:
+    
+    Company: $companyName
+    Position: $jobTitle
+    Location: $jobLocation
+    Skills Required: ${skills.join(', ')}
+    
+    The description should include:
+    1. A brief overview of the role
+    2. Key responsibilities
+    3. Required qualifications
+    4. Benefits (if applicable)
+    
+    Keep it concise but comprehensive (50-100 words).
+    ''';
+    
+    // Call Gemini API
+    final apiKey = dotenv.env['GEMINI_API_KEY'] ?? '';
+    if (apiKey.isEmpty) {
+      throw Exception('Gemini API key not found. Please check your .env file.');
+    }
+    
+    final model = GenerativeModel(
+      model: 'gemini-2.0-flash',
+      apiKey: apiKey,
+    );
+    
+    final content = [Content.text(prompt)];
+    
+    // Add timeout to API call
+    final response = await model.generateContent(content)
+        .timeout(
+          Duration(seconds: 30),
+          onTimeout: () => throw TimeoutException('Generation request timed out. Please try again.'),
+        );
+    
+    // Set generated text to controller
+    if (response.text != null && response.text!.isNotEmpty) {
+      controller.text = response.text!;
+      
+      // Save the generated description
+      await _saveGeneratedDescription(job['id'], response.text!);
+    } else {
+      throw Exception('Empty response from Gemini API');
+    }
+  } catch (e) {
+    if (e is TimeoutException) {
+      print('Generation timed out: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Request timed out. Please try again.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    } else {
+      print('Error generating job description: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not generate description. Please try again or enter manually.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      
+      // Provide a fallback template if generation fails
+      final companyName = job['company'] ?? 'Unknown Company';
+      final jobTitle = job['title'] ?? 'Unknown Position';
+      final jobLocation = job['location'] ?? 'Unknown Location';
+       
+      // Extract skills for the fallback template
+      List<String> skills = [];
+      if (job['skills_list'] != null && job['skills_list'] is List) {
+        skills = List<String>.from(job['skills_list']);
+      } else if (job['skills'] != null && job['skills'].toString().isNotEmpty) {
+        skills = job['skills'].toString().split(',').map((s) => s.trim()).toList();
+      }
+      
+      controller.text = '''
+Position: $jobTitle at $companyName
+Location: $jobLocation
+Required Skills: ${skills.join(', ')}
+
+Job Overview:
+[Add a brief overview of the role here]
+
+Key Responsibilities:
+- [Add responsibility 1]
+- [Add responsibility 2]
+- [Add responsibility 3]
+
+Qualifications:
+- [Add qualification 1]
+- [Add qualification 2]
+- [Add qualification 3]
+
+Benefits:
+- [Add benefit 1]
+- [Add benefit 2]
+
+Join our team and contribute to [brief description of company mission or project].
+      ''';
+    }
+  } finally {
+    // Always reset the generating flag when done using the callback
+    if (mounted) {
+      setGeneratingCallback(false);
+    }
+  }
+}
+
+void _showEditDescriptionDialog(Map<String, dynamic> job) async {
+  final TextEditingController descriptionController = TextEditingController();
+  
+  // Set the controller with existing description first
+  descriptionController.text = job['description'] ?? '';
+  
+  // If no description, check for a saved one
+  if (job['description'] == null || job['description'].toString().isEmpty) {
+    final savedDescription = await _loadGeneratedDescription(job['id']);
+    
+    if (savedDescription != null && savedDescription.isNotEmpty) {
+      // Show dialog asking to use the saved description
+      final shouldUseSaved = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text('Use Previous Generation?'),
+          content: Text('We found a previously generated description for this job. Would you like to use it?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text('No'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text('Yes'),
             ),
           ],
-        );
-      },
-    );
+        ),
+      ) ?? false;
+      
+      if (shouldUseSaved) {
+        descriptionController.text = savedDescription;
+      }
+    }
   }
+  
+  showDialog(
+    context: context,
+    builder: (BuildContext context) {
+      // Using StatefulBuilder with a properly defined isGenerating variable
+      bool isGenerating = false; // Define it here
+      
+      return StatefulBuilder(
+        builder: (context, setState) {
+          return AlertDialog(
+            title: Text('Edit Job Description'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Manual input section
+                  TextField(
+                    controller: descriptionController,
+                    decoration: InputDecoration(
+                      hintText: 'Enter job description',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 8,
+                  ),
+                  SizedBox(height: 16),
+                  
+                  // Or divider
+                  Row(
+                    children: [
+                      Expanded(child: Divider()),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                        child: Text('OR', style: TextStyle(color: Colors.grey)),
+                      ),
+                      Expanded(child: Divider()),
+                    ],
+                  ),
+                  SizedBox(height: 16),
+
+                  ElevatedButton(
+                    onPressed: () {
+                      listAvailableModels();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Listing models - check console logs')),
+                      );
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.grey,
+                    ),
+                    child: Text('List Available Models'),
+                  ),
+                  SizedBox(height: 16),
+                  
+                  
+                  // AI generation section
+                  ElevatedButton.icon(
+                    onPressed: isGenerating 
+                      ? null 
+                      : () => _generateJobDescription(
+                          setState, 
+                          job, 
+                          descriptionController,
+                          (value) => setState(() => isGenerating = value)
+                        ),
+                    icon: isGenerating 
+                      ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) 
+                      : Icon(Icons.auto_awesome),
+                    label: Text(isGenerating ? 'Generating...' : 'Generate with AI'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                  
+                  if (isGenerating)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: Text(
+                        'Generating description based on job details...',
+                        style: TextStyle(fontStyle: FontStyle.italic, fontSize: 12),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                child: Text('Cancel'),
+                onPressed: () {
+                  Navigator.of(context).pop();
+                },
+              ),
+              TextButton(
+                child: Text('Save'),
+                onPressed: () async {
+                  try {
+                    final currentUser = FirebaseAuth.instance.currentUser;
+                    if (currentUser != null) {
+                      // Update in main jobs collection
+                      await FirebaseFirestore.instance
+                          .collection('jobs')
+                          .doc(job['id'])
+                          .update({'job_description': descriptionController.text});
+                      
+                      // Update in user's jobs subcollection
+                      await FirebaseFirestore.instance
+                          .collection('users')
+                          .doc(currentUser.uid)
+                          .collection('jobs')
+                          .doc(job['id'])
+                          .update({'job_description': descriptionController.text});
+                      
+                      _fetchJobs(); // Refresh jobs list
+                    }
+                  } catch (e) {
+                    print("Error updating job description: $e");
+                  }
+                  Navigator.of(context).pop();
+                },
+              ),
+            ],
+          );
+        }
+      );
+    },
+  );
+}
+
+
 
   // New method to show set deadline dialog
   // Update the _showSetDeadlineDialog method in your ManageJobsPage class
@@ -1085,24 +1562,89 @@ void _showInterviewSlotDialog(Map<String, dynamic> job) {
         }
       }
       
-      return AlertDialog(
-        title: Text('Set Interview Slots for ${job['title']}'),
-        content: SingleChildScrollView(
-          child: InterviewSlotSelector(
-            jobDeadline: jobDeadline, // Pass the deadline
-            onSlotsSelected: (slots) async {
-              // Update job with interview slots
-              await _updateJobWithInterviewSlots(job['id'], slots);
-              Navigator.of(context).pop(); // Close the dialog after successful update
-            },
+      return Dialog(
+        // Use a normal Dialog instead of AlertDialog
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.9,
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.9,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Title bar
+              Container(
+                padding: EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).primaryColor,
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(16),
+                    topRight: Radius.circular(16),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Set Interview Slots for ${job['title']}',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.close, color: Colors.black),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ],
+                ),
+              ),
+              
+              // Content - use SingleChildScrollView with proper constraints
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.all(16),
+                  child: InterviewSlotSelector(
+                    jobDeadline: jobDeadline,
+                    onSlotsSelected: (slots) async {
+                      // Update job with interview slots
+                      await _updateJobWithInterviewSlots(job['id'], slots);
+                      Navigator.of(context).pop(); // Close the dialog after successful update
+                    },
+                  ),
+                ),
+              ),
+              
+              // Action buttons bar
+              Container(
+                padding: EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.only(
+                    bottomLeft: Radius.circular(16),
+                    bottomRight: Radius.circular(16),
+                  ),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(),
+                      child: Text('Cancel'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text('Cancel'),
-          ),
-        ],
       );
     },
   );
@@ -1114,21 +1656,25 @@ Future<void> _checkAndDisableInactiveJobInterviewSlots() async {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) return;
     
-    // Get all jobs
-    final allJobsSnapshot = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(currentUser.uid)
+    // Check jobs in the MAIN jobs collection, not the employer's subcollection
+    // Filter for jobs created by this employer that have interview slots
+    final jobsSnapshot = await FirebaseFirestore.instance
         .collection('jobs')
+        .where('employer_id', isEqualTo: currentUser.uid)
+        .where('has_interview_slots', isEqualTo: true)
         .get();
     
-    for (var jobDoc in allJobsSnapshot.docs) {
+    print('Found ${jobsSnapshot.docs.length} jobs with interview slots to check');
+    
+    for (var jobDoc in jobsSnapshot.docs) {
       final jobData = jobDoc.data();
       final deadline = jobData['deadline'] ?? '';
-      final hasInterviewSlots = jobData['has_interview_slots'] ?? false;
+      final status = jobData['status'] ?? 'active';
       
-      // Check if the job has become inactive
-      if (!isJobActive(deadline) && hasInterviewSlots) {
-        // Disable interview slots for this job
+      // Check if the job has become inactive either by deadline or status
+      if (!isJobActive(deadline) || status == 'inactive') {
+        print('Disabling interview slots for inactive job: ${jobDoc.id}');
+        // Disable interview slots for this job (only in main collection)
         await _disableInterviewSlots(jobDoc.id);
       }
     }
@@ -1157,18 +1703,19 @@ Future<void> _disableInterviewSlots(String jobId) async {
         .doc(jobId)
         .update(updateData);
     
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(currentUser.uid)
-        .collection('jobs')
-        .doc(jobId)
-        .update(updateData);
+    // await FirebaseFirestore.instance
+    //     .collection('users')
+    //     .doc(currentUser.uid)
+    //     .collection('jobs')
+    //     .doc(jobId)
+    //     .update(updateData);
     
     print('Interview slots disabled for job: $jobId');
   } catch (e) {
     print('Error disabling interview slots: $e');
   }
 }
+
 Future<void> _updateJobWithInterviewSlots(String jobId, List<InterviewSlot> slots) async {
   try {
     final currentUser = FirebaseAuth.instance.currentUser;
@@ -1203,12 +1750,12 @@ Future<void> _updateJobWithInterviewSlots(String jobId, List<InterviewSlot> slot
         .doc(jobId)
         .update(updateData);
     
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(currentUser.uid)
-        .collection('jobs')
-        .doc(jobId)
-        .update(updateData);
+    // await FirebaseFirestore.instance
+    //     .collection('users')
+    //     .doc(currentUser.uid)
+    //     .collection('jobs')
+    //     .doc(jobId)
+    //     .update(updateData);
     
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Interview slots added successfully')),
@@ -1222,7 +1769,4 @@ Future<void> _updateJobWithInterviewSlots(String jobId, List<InterviewSlot> slot
     );
   }
 }
-
-
-
 }

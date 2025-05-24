@@ -5,8 +5,11 @@ import 'package:provider/provider.dart';
 import 'package:prototype_2/providers/user_provider.dart';
 import 'package:prototype_2/services/rasa_chatbot_service.dart';
 import 'screens/login.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: ".env");
   
   try {
     print("[MAIN] Initializing Firebase");

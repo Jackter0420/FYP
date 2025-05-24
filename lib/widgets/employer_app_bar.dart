@@ -240,16 +240,30 @@ Future<int> _checkUnconfirmedInterviews() async {
     final currentUser = FirebaseAuth.instance.currentUser;
     if (currentUser == null) return 0;
     
-    // Query applications with selected_interview_date but not confirmed
+    // Use fields that actually exist in your Firebase structure
     final querySnapshot = await FirebaseFirestore.instance
         .collection('users')
         .doc(currentUser.uid)
         .collection('applications')
-        .where('selected_interview_date', isNull: false)
-        .where('is_interview_date_confirmed', isEqualTo: false)
+        .where('booked_interview_id', isNull: false)  // ← This field EXISTS
         .get();
     
-    return querySnapshot.docs.length;
+    int unconfirmedCount = 0;
+    
+    // Filter in code to avoid compound query index requirement
+    for (var doc in querySnapshot.docs) {
+      final appData = doc.data();
+      
+      // Count interviews that are scheduled but not yet confirmed/completed
+      final interviewStatus = appData['interview_status'] ?? '';
+      
+      // Show badge for scheduled interviews awaiting employer action
+      if (interviewStatus == 'scheduled') {
+        unconfirmedCount++;
+      }
+    }
+    
+    return unconfirmedCount;
   } catch (e) {
     print('Error checking unconfirmed interviews: $e');
     return 0;

@@ -5,12 +5,12 @@ import '../models/interview_slot.dart';
 
 class InterviewSlotSelector extends StatefulWidget {
   final Function(List<InterviewSlot>) onSlotsSelected;
-  final DateTime? jobDeadline; // Add deadline parameter
+  final DateTime? jobDeadline;
   
   const InterviewSlotSelector({
     Key? key, 
     required this.onSlotsSelected,
-    this.jobDeadline, // Add this parameter
+    this.jobDeadline,
   }) : super(key: key);
   
   @override
@@ -19,12 +19,13 @@ class InterviewSlotSelector extends StatefulWidget {
 
 class _InterviewSlotSelectorState extends State<InterviewSlotSelector> {
   List<DateTime> selectedDates = [];
-  TimeOfDay? startTime;
-  TimeOfDay? endTime;
+  TimeInterval? startTime;
+  TimeInterval? endTime;
   String meetingLink = '';
   List<InterviewSlot> generatedSlots = [];
+  List<InterviewSlot> selectedSlots = [];
   
-  // Custom date picker with multiple selection
+  // Custom time picker with multiple selection
   Future<void> _showMultipleDatePicker() async {
     // Determine the latest date for date picker
     DateTime lastDate = DateTime.now().add(Duration(days: 90));
@@ -40,7 +41,7 @@ class _InterviewSlotSelectorState extends State<InterviewSlotSelector> {
         return MultipleDatePickerDialog(
           initialDates: selectedDates,
           firstDate: DateTime.now(),
-          lastDate: lastDate, // Updated to consider deadline
+          lastDate: lastDate,
         );
       },
     );
@@ -48,10 +49,48 @@ class _InterviewSlotSelectorState extends State<InterviewSlotSelector> {
     if (result != null) {
       setState(() {
         selectedDates = result;
-        selectedDates.sort(); // Keep dates in order
+        selectedDates.sort();
       });
     }
   }
+  
+  // Show custom time picker with 30-minute intervals
+  Future<void> _showCustomTimePicker(bool isStartTime) async {
+    final result = await showDialog<TimeInterval>(
+      context: context,
+      builder: (BuildContext context) {
+        return CustomTimePickerDialog(
+          initialTime: isStartTime ? startTime : endTime,
+          title: isStartTime ? 'Select Start Time' : 'Select End Time',
+        );
+      },
+    );
+    
+    if (result != null) {
+      setState(() {
+        if (isStartTime) {
+          startTime = result;
+          // If start time is set after end time, clear end time
+          if (endTime != null && result.totalMinutes >= endTime!.totalMinutes) {
+            endTime = null;
+          }
+        } else {
+          endTime = result;
+        }
+      });
+    }
+  }
+
+void _toggleSlotSelection(InterviewSlot slot) {
+  setState(() {
+    if (selectedSlots.contains(slot)) {
+      selectedSlots.remove(slot);
+    } else {
+      selectedSlots.add(slot);
+    }
+  });
+}
+
   
   void _generateTimeSlots() {
     if (selectedDates.isEmpty || startTime == null || endTime == null) {
@@ -76,6 +115,17 @@ class _InterviewSlotSelectorState extends State<InterviewSlotSelector> {
       }
     }
     
+    // Validate start time is before end time
+    if (startTime!.totalMinutes >= endTime!.totalMinutes) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Start time must be before end time'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+    
     List<InterviewSlot> slots = [];
     
     for (DateTime date in selectedDates) {
@@ -98,6 +148,9 @@ class _InterviewSlotSelectorState extends State<InterviewSlotSelector> {
       while (currentSlotStart.isBefore(dayEndTime)) {
         DateTime slotEnd = currentSlotStart.add(Duration(minutes: 30));
         
+        // Don't create slot if it goes beyond the end time
+        if (slotEnd.isAfter(dayEndTime)) break;
+        
         slots.add(InterviewSlot(
           id: '${date.millisecondsSinceEpoch}_${currentSlotStart.hour}_${currentSlotStart.minute}',
           startTime: currentSlotStart,
@@ -111,6 +164,7 @@ class _InterviewSlotSelectorState extends State<InterviewSlotSelector> {
     
     setState(() {
       generatedSlots = slots;
+      selectedSlots = List.from(slots);
     });
   }
   
@@ -172,7 +226,7 @@ class _InterviewSlotSelectorState extends State<InterviewSlotSelector> {
             ),
           ],
           
-          // Multiple date picker
+          // Date picker
           Text(
             'Select Interview Dates:',
             style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
@@ -184,7 +238,7 @@ class _InterviewSlotSelectorState extends State<InterviewSlotSelector> {
             label: Text('Select Interview Dates'),
           ),
           
-          // Show selected dates with ability to remove
+          // Show selected dates
           if (selectedDates.isNotEmpty) ...[
             SizedBox(height: 12),
             Text(
@@ -221,19 +275,9 @@ class _InterviewSlotSelectorState extends State<InterviewSlotSelector> {
               Expanded(
                 child: OutlinedButton.icon(
                   icon: Icon(Icons.access_time),
-                  onPressed: () async {
-                    final picked = await showTimePicker(
-                      context: context,
-                      initialTime: TimeOfDay(hour: 9, minute: 0),
-                    );
-                    if (picked != null) {
-                      setState(() {
-                        startTime = picked;
-                      });
-                    }
-                  },
+                  onPressed: () => _showCustomTimePicker(true),
                   label: Text(startTime != null 
-                    ? 'Start: ${startTime!.format(context)}'
+                    ? 'Start: ${startTime!.toString()}'
                     : 'Select Start Time'),
                 ),
               ),
@@ -241,19 +285,9 @@ class _InterviewSlotSelectorState extends State<InterviewSlotSelector> {
               Expanded(
                 child: OutlinedButton.icon(
                   icon: Icon(Icons.access_time),
-                  onPressed: () async {
-                    final picked = await showTimePicker(
-                      context: context,
-                      initialTime: TimeOfDay(hour: 17, minute: 0),
-                    );
-                    if (picked != null) {
-                      setState(() {
-                        endTime = picked;
-                      });
-                    }
-                  },
+                  onPressed: () => _showCustomTimePicker(false),
                   label: Text(endTime != null 
-                    ? 'End: ${endTime!.format(context)}'
+                    ? 'End: ${endTime!.toString()}'
                     : 'Select End Time'),
                 ),
               ),
@@ -326,7 +360,10 @@ class _InterviewSlotSelectorState extends State<InterviewSlotSelector> {
                 itemCount: generatedSlots.length,
                 itemBuilder: (context, index) {
                   final slot = generatedSlots[index];
+                  final isSelected = selectedSlots.contains(slot);
+
                   return Card(
+                    color: isSelected ? Colors.white : Colors.grey.shade200,
                     child: ListTile(
                       leading: CircleAvatar(
                         child: Text('${index + 1}'),
@@ -345,7 +382,12 @@ class _InterviewSlotSelectorState extends State<InterviewSlotSelector> {
                             ),
                         ],
                       ),
-                      trailing: Icon(Icons.access_time, color: Colors.blue),
+                      trailing:Checkbox(
+                        value: isSelected,
+                        onChanged: (value) => _toggleSlotSelection(slot),
+                        activeColor: Colors.green,
+                      ),
+                      onTap: () => _toggleSlotSelection(slot),
                     ),
                   );
                 },
@@ -370,7 +412,7 @@ class _InterviewSlotSelectorState extends State<InterviewSlotSelector> {
                 ElevatedButton.icon(
                   icon: Icon(Icons.check),
                   onPressed: () {
-                    widget.onSlotsSelected(generatedSlots);
+                    widget.onSlotsSelected(selectedSlots);
                   },
                   label: Text('Confirm Slots'),
                   style: ElevatedButton.styleFrom(
@@ -387,7 +429,375 @@ class _InterviewSlotSelectorState extends State<InterviewSlotSelector> {
   }
 }
 
-// Custom Multiple Date Picker Dialog
+
+
+
+// Custom Time Picker Dialog with 30-minute intervals
+// Fixed CustomTimePickerDialog with proper scroll controller initialization
+class CustomTimePickerDialog extends StatefulWidget {
+  final TimeInterval? initialTime;
+  final String title;
+  
+  const CustomTimePickerDialog({
+    Key? key,
+    this.initialTime,
+    required this.title,
+  }) : super(key: key);
+  
+  @override
+  State<CustomTimePickerDialog> createState() => _CustomTimePickerDialogState();
+}
+
+class _CustomTimePickerDialogState extends State<CustomTimePickerDialog> {
+  late FixedExtentScrollController _hourController;
+  late FixedExtentScrollController _halfController;
+  
+  late int selectedHour;
+  late int selectedHalf; // 0 for :00, 1 for :30
+  late int selectedPeriod; // 0 for AM, 1 for PM
+  
+  // Track the current index
+  late int _hourIndex;
+  late int _halfIndex;
+  
+  @override
+  void initState() {
+    super.initState();
+    
+    // Initialize with current time or provided time
+    if (widget.initialTime != null) {
+      selectedHour = widget.initialTime!.hour % 12;
+      selectedHour = selectedHour == 0 ? 12 : selectedHour;
+      selectedHalf = widget.initialTime!.minute == 30 ? 1 : 0;
+      selectedPeriod = widget.initialTime!.hour >= 12 ? 1 : 0;
+    } else {
+      selectedHour = 9;
+      selectedHalf = 0;
+      selectedPeriod = 0;
+    }
+    
+    // Calculate initial indices (start at middle position)
+    _hourIndex = (selectedHour - 1) + 48; 
+    _halfIndex = selectedHalf + 28; 
+    
+    // Initialize controllers
+    _hourController = FixedExtentScrollController(
+      initialItem: _hourIndex,
+    );
+    _halfController = FixedExtentScrollController(
+      initialItem: _halfIndex,
+    );
+  }
+  
+  @override
+  void dispose() {
+    _hourController.dispose();
+    _halfController.dispose();
+    super.dispose();
+  }
+  
+  TimeInterval _getSelectedTime() {
+    final realHour = selectedPeriod == 1 
+        ? (selectedHour == 12 ? 12 : selectedHour + 12)
+        : (selectedHour == 12 ? 0 : selectedHour);
+    final minute = selectedHalf == 1 ? 30 : 0;
+    return TimeInterval(realHour, minute);
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        padding: EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              widget.title,
+              style: TextStyle(
+                fontSize: 18, 
+                fontWeight: FontWeight.bold,
+                color: Colors.black,
+              ),
+            ),
+            SizedBox(height: 24),
+            
+            // Time picker with AM/PM buttons
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // Hour wheel
+                Container(
+                  width: 60,
+                  height: 200,
+                  child: Stack(
+                    children: [
+                      Positioned(
+                        top: 75,
+                        left: 0,
+                        right: 0,
+                        height: 50,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.lightBlue.withOpacity(0.3),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                      ),
+                      ListWheelScrollView.useDelegate(
+                        controller: _hourController,
+                        itemExtent: 50,
+                        perspective: 0.005,
+                        diameterRatio: 1.2,
+                        physics: FixedExtentScrollPhysics(),
+                        onSelectedItemChanged: (index) {
+                          setState(() {
+                            _hourIndex = index;
+                            selectedHour = (index % 12) + 1;
+                          });
+                        },
+                        childDelegate: ListWheelChildBuilderDelegate(
+                          builder: (context, index) {
+                            final hour = (index % 12) + 1;
+                            return Center(
+                              child: Text(
+                                '$hour',
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.black,
+                                ),
+                              ),
+                            );
+                          },
+                          childCount: 120,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                
+                // Colon separator
+                Container(
+                  width: 20,
+                  child: Center(
+                    child: Text(
+                      ':',
+                      style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.black,
+                      ),
+                    ),
+                  ),
+                ),
+                
+                // Half-hour wheel (00/30)
+                Container(
+                  width: 60,
+                  height: 200,
+                  child: Stack(
+                    children: [
+                      Positioned(
+                        top: 75,
+                        left: 0,
+                        right: 0,
+                        height: 50,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.lightBlue.withOpacity(0.3),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                      ),
+                      ListWheelScrollView.useDelegate(
+                        controller: _halfController,
+                        itemExtent: 50,
+                        perspective: 0.005,
+                        diameterRatio: 1.2,
+                        physics: FixedExtentScrollPhysics(),
+                        onSelectedItemChanged: (index) {
+                          setState(() {
+                            _halfIndex = index;
+                            selectedHalf = index % 2;
+                          });
+                        },
+                        childDelegate: ListWheelChildBuilderDelegate(
+                          builder: (context, index) {
+                            final minute = (index % 2) == 0 ? '00' : '30';
+                            return Center(
+                              child: Text(
+                                minute,
+                                style: TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.black,
+                                ),
+                              ),
+                            );
+                          },
+                          childCount: 60,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                
+                SizedBox(width: 20),
+                
+                // AM/PM toggle buttons
+                Container(
+                  width: 70,
+                  height: 200,
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        // AM button
+                        GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              selectedPeriod = 0;
+                            });
+                          },
+                          child: Container(
+                            width: 50,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: selectedPeriod == 0 
+                                  ? Colors.lightBlue.withOpacity(0.3)
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: selectedPeriod == 0 
+                                    ? Colors.lightBlue
+                                    : Colors.transparent,
+                              ),
+                            ),
+                            child: Center(
+                              child: Text(
+                                'AM',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.black,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                        // PM button
+                        GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              selectedPeriod = 1;
+                            });
+                          },
+                          child: Container(
+                            width: 50,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: selectedPeriod == 1 
+                                  ? Colors.lightBlue.withOpacity(0.3)
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: selectedPeriod == 1 
+                                    ? Colors.lightBlue
+                                    : Colors.transparent,
+                              ),
+                            ),
+                            child: Center(
+                              child: Text(
+                                'PM',
+                                style: TextStyle(
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.black,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            
+            SizedBox(height: 32),
+            
+            // Action buttons
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: Text(
+                    'Cancel',
+                    style: TextStyle(color: Colors.black),
+                  ),
+                ),
+                SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(context).pop(_getSelectedTime());
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white,
+                    foregroundColor: Colors.black,
+                    side: BorderSide(color: Colors.grey.shade300),
+                  ),
+                  child: Text('OK'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Updated TimeInterval class with proper validation
+class TimeInterval {
+  final int hour;
+  final int minute;
+  
+  TimeInterval(this.hour, this.minute) {
+    // Validate that minute is either 0 or 30
+    assert(minute == 0 || minute == 30, 'Minute must be 0 or 30');
+    // Validate hour range
+    assert(hour >= 0 && hour <= 23, 'Hour must be between 0 and 23');
+  }
+  
+  int get totalMinutes => hour * 60 + minute;
+  
+  @override
+  String toString() {
+    final period = hour >= 12 ? 'PM' : 'AM';
+    final displayHour = hour == 0 ? 12 : (hour > 12 ? hour - 12 : hour);
+    final displayMinute = minute == 0 ? '00' : '30';
+    return '$displayHour:$displayMinute $period';
+  }
+  
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TimeInterval &&
+          runtimeType == other.runtimeType &&
+          hour == other.hour &&
+          minute == other.minute;
+  
+  @override
+  int get hashCode => hour.hashCode ^ minute.hashCode;
+}
+
+
+// Rest of the MultipleDatePickerDialog remains the same as in your original code...
 class MultipleDatePickerDialog extends StatefulWidget {
   final List<DateTime> initialDates;
   final DateTime firstDate;
